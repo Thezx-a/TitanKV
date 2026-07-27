@@ -9,7 +9,200 @@
 
 面试和做项目是两种不同的能力：做项目讲究深度和工程权衡，面试讲究「在有限时间里把关键点讲清楚、把代码写对」。LeetCode 1206 的跳表、146 的 LRU、460 的 LFU 看似是算法题，其实都在考你对 minikv MemTable、LRUCache 的理解；系统设计题「设计一个分布式 KV」更是直接对应 TitanKV 本身。我们这一模块要做的，就是把每个面试题映射回它对应的 TitanKV 模块，让你「以题带学、以学应题」。
 
-学完这一模块，你会拿到一份覆盖 60+ 真题的应试地图：C++ 基础与并发怎么答、LSM 和 B+ 树怎么对比、Raft 选举和日志复制怎么画图、系统设计五步法怎么套用。更重要的是，你会学会怎么把 TitanKV 这段项目经历讲成简历上的亮点——不是堆砌技术名词，而是用 STAR 讲清「我遇到什么问题、做了什么、量化结果如何」。
+学完这一模块，你会拿到一份覆盖 **110+ 真题**的应试地图：C++ 基础与并发怎么答、LSM 和 B+ 树怎么对比、Raft 选举和日志复制怎么画图、系统设计五步法怎么套用。更重要的是，你会学会怎么把 TitanKV 这段项目经历讲成简历上的亮点——不是堆砌技术名词，而是用 STAR 讲清「我遇到什么问题、做了什么、量化结果如何」。
+
+---
+
+## 0. TitanKV 简历项目总结（HR / 面试官视角）
+
+### 0.1 一句话定位（Elevator Pitch）
+
+> **TitanKV**：从零实现的分布式 KV 平台——C++17 手写 LSM-Tree 存储引擎与 C++20 协程网络库，Go 微服务网关（JWT/RBAC/限流），Next.js 实时控制台，覆盖「存储 → 网络 → 服务 → 前端 → 可观测性」全链路。
+
+### 0.2 简历条目模板（可直接粘贴）
+
+**项目名称**：TitanKV 分布式键值存储平台  
+**角色**：核心开发 / 个人项目（按实际情况改）  
+**技术栈**：C++17/20 · Go 1.23 · Next.js 14 · Redis · Prometheus · Docker  
+**时间**：20XX.XX – 20XX.XX  
+
+**项目描述（STAR）**：
+
+- **S（背景）**：为深入理解工业级 KV 存储与分布式系统，从零实现可运行的多层架构平台，对标 LevelDB/RocksDB + TiKV 单机引擎 + 微服务网关模式。
+- **T（任务）**：独立完成存储引擎（minikv）、协程网络库（skynet）、Go API 网关与 4 个业务微服务、Next.js 管理控制台及课程级手撕题单测体系。
+- **A（行动）**：
+  - **存储层**：实现 WAL + SkipList MemTable + SSTable + Leveled Compaction + BloomFilter + InternalKey/MVCC，支持崩溃恢复与版本化读写。
+  - **网络层**：基于 epoll + C++20 协程实现 Reactor、HTTP/1.1 状态机解析、连接池与一致性哈希负载均衡。
+  - **服务层**：Gin 网关洋葱中间件链（RequestID/Logger/Recover/RateLimit/Auth/RBAC），JWT 双 token + APIKey，反向代理 4 个 Go 微服务。
+  - **应用层**：Next.js App Router + TanStack Query + SSE 实时指标仪表盘，端到端 `make run-all` + `make web-dev` 可复现。
+- **R（结果）**：`tests/course/` 7 套手撕单测全绿；网关 + Auth/Meta/Data/Observability 五服务联调通过；形成 15 模块中英双语课程与 110+ 面试题库。
+
+### 0.3 设计要素（面试官最爱追问「为什么这样设计」）
+
+| 设计决策 | 选型 | 理由（简历/面试话术） |
+|----------|------|------------------------|
+| 存储结构 | LSM-Tree 而非 B+ Tree | 写路径顺序 IO、高吞吐；适合 KV 写多读少场景 |
+| MemTable | SkipList | 实现简单、范围扫描友好、并发读写锁粒度小 |
+| 点查加速 | 每层 SSTable 独立 BloomFilter | 减少 99% 无效磁盘读，用可控假阳性换 IO |
+| 版本模型 | InternalKey（user_key + seq + type） | 支持 MVCC 快照读与墓碑延迟删除 |
+| 持久化 | WAL 先写日志再写 MemTable | 崩溃后可重放，保证 durability |
+| 元数据 | Manifest 追加日志 | 重启重建 VersionSet，容忍尾部撕裂写 |
+| 网络模型 | epoll LT + C++20 无栈协程 | 单线程高并发 IO，对称转移避免栈爆 |
+| 网关模式 | BFF 集中鉴权 + 反向代理 | 业务服务无状态，安全策略一处维护 |
+| 认证 | JWT access + refresh 双 token | 短效 access 减泄露面，refresh 改善体验 |
+| 限流 | Redis Lua 令牌桶（可降级） | 分布式原子扣减；Redis 不可用时 no-op 保可用 |
+| 前端刷新 | REST 首屏 + SSE 增量 | 避免轮询，仪表盘实时性 < 1s |
+| 分片（规划） | Range + Raft 副本组 | 兼容 Scan；强一致写路径 |
+
+### 0.4 技术亮点（差异化，区别于「调库项目」）
+
+1. **真·手写存储引擎**：非 RocksDB 封装，含 SkipList/Bloom/WAL/SSTable/Compaction 完整链路。
+2. **双 C++ 子系统**：minikv（存储）+ skynet（网络）可独立编译测试，体现工程拆分能力。
+3. **全栈可运行**：C++ 单测 + Go 微服务 + Next.js 控制台，`curl` 与浏览器均可验证。
+4. **面试闭环**：每模块映射源码 + LeetCode 手撕 + 系统设计五步法，Module 14 端到端复现。
+5. **可观测性预埋**：Prometheus metrics、Jaeger trace、Grafana 仪表盘（`deploy/dev/`）。
+6. **现代 C++ 实践**：RAII、移动语义、`shared_mutex`、`co_await`、对称转移、enum class。
+
+### 0.5 量化指标（可写进简历，按你实测填写）
+
+| 指标 | 参考值 | 说明 |
+|------|--------|------|
+| 存储引擎单测 | 7/7 PASS | `tests/course/` 手撕题 |
+| 微服务数量 | 5 | Gateway + Auth/Data/Meta/Observability |
+| 网关中间件 | 6 层 | 洋葱模型 |
+| 课程模块 | 15 | Module 00–14 |
+| 面试题库 | 110+ | 含一面/二面/三面 |
+| 端到端延迟 | P99 < 20ms（本地） | 内存后端 MVP |
+| Bloom 误判率 | ~1% | 可配置 m/n/k |
+
+### 0.6 常见追问与 30 秒答法
+
+| 追问 | 30 秒答法 |
+|------|-----------|
+| 和 Redis 有什么区别？ | Redis 内存+多数据结构；TitanKV 面向持久化 LSM+分布式分片，定位更接近 TiKV/RocksDB 生态。 |
+| 为什么不用现成的 RocksDB？ | 学习目标是从零理解 WAL/Compaction/MVCC；生产可替换为 RocksDB，接口层已抽象。 |
+| 你负责哪一块？ | （举例）我负责 minikv Compaction 策略调优 + Gateway RBAC 权限模型 + SSE 指标推送。 |
+| 最大难点？ | Compaction 写放大与读放大权衡；用 Leveled L1+ + Bloom 将点查控制在 3 层以内。 |
+| 如果上线还要做什么？ | gRPC 接 minikv、Raft 副本、PD 分片调度、K8s Helm、压测与 SLO。 |
+
+---
+
+## 0.7 面试题总览（110+ 题 · 按轮次）
+
+> **用法**：一面抓基础与手撕；二面抓项目深挖与存储/网络；三面抓架构权衡与领导力。带 ★ 的为高频必背。
+
+### 一面 · 基础与编码（约 45 题）
+
+| # | 题目 | 模块 | ★ |
+|---|------|------|---|
+| Q1 | `int* p, q;` 中 p、q 类型？ | C++ | ★ |
+| Q2 | 虚函数 vs 纯虚函数；虚析构必要性 | C++ | ★ |
+| Q3 | 四种智能指针及循环引用 | C++ | ★ |
+| Q4 | 移动语义与完美转发 | C++ | ★ |
+| Q5 | RAII 是什么？minikv 例子 | C++ | ★ |
+| Q6 | vector 扩容；reserve vs resize | STL | |
+| Q7 | map vs unordered_map | STL | ★ |
+| Q8 | inline 与 ODR | C++ | |
+| Q9 | enum class 优势 | C++ | |
+| Q10 | `[[nodiscard]]` 等属性 | C++ | |
+| Q11 | mutex vs shared_mutex | 并发 | ★ |
+| Q12 | 死锁四条件与预防 | 并发 | ★ |
+| Q13 | atomic 六种内存序 | 并发 | ★ |
+| Q14 | condition_variable 与虚假唤醒 | 并发 | ★ |
+| Q15 | 线程池核心要素 | 并发 | ★ |
+| Q16 | async vs thread | 并发 | |
+| Q17 | 原子能完全替代锁吗？ | 并发 | |
+| Q18 | thread_local 用途 | 并发 | |
+| Q24 | LeetCode 1206 跳表 | 数据结构 | ★ |
+| Q25 | LeetCode 146 LRU | 数据结构 | ★ |
+| Q26 | LeetCode 460 LFU | 数据结构 | |
+| Q27 | 跳表 vs 红黑树 vs B+ 树 | 数据结构 | ★ |
+| Q28 | Bloom 误判率公式 | 数据结构 | ★ |
+| Q56 | 进程与线程区别；用户态/内核态切换成本 | OS | ★ |
+| Q57 | 虚拟内存、页表、TLB | OS | ★ |
+| Q58 | 页面置换：LRU vs Clock vs LFU | OS | |
+| Q59 | 死锁检测：资源分配图 vs 银行家算法 | OS | |
+| Q60 | TCP 三次握手、四次挥手、TIME_WAIT | 网络 | ★ |
+| Q61 | TCP vs UDP；可靠 UDP（QUIC） | 网络 | ★ |
+| Q62 | HTTP 状态码 301/302/304/401/403 区别 | 网络 | |
+| Q63 | DNS 解析过程；TTL 与缓存 | 网络 | |
+| Q64 | 对称加密 vs 非对称加密；HTTPS 握手 | 安全 | |
+| Q65 | 哈希表冲突：链地址 vs 开放寻址 | 数据结构 | ★ |
+| Q66 | 快排/归并/堆排复杂度与稳定性 | 算法 | ★ |
+| Q67 | 二分查找边界：lower_bound 实现 | 算法 | |
+| Q68 | 拓扑排序（课程表） | 算法 | |
+| Q69 | BFS vs DFS 适用场景 | 算法 | |
+| Q70 | 单例模式几种写法；Meyers 为何线程安全 | 设计模式 | ★ |
+| Q71 | 工厂模式在 minikv 中的应用场景 | 设计模式 | |
+| Q72 | `const` 修饰指针的四种形式 | C++ | |
+| Q73 | 左值、右值、将亡值（C++11） | C++ | ★ |
+| Q74 | 模板特化 vs 偏特化 | C++ | |
+| Q75 | 虚函数表布局；多继承虚表 | C++ | |
+| S1–S7 | 手撕：跳表/LRU/线程池/unique_ptr/单例/epoll/SPSC | 手撕 | ★ |
+
+### 二面 · 项目深挖与进阶（约 45 题）
+
+| # | 题目 | 模块 | ★ |
+|---|------|------|---|
+| Q19–Q23 | C++20 协程全套 | 协程 | ★ |
+| Q29–Q31 | 一致性哈希、MurmurHash、链表题 | 数据结构 | ★ |
+| Q32–Q41 | LSM/WAL/SST/Compaction/MVCC 全套 | 存储 | ★ |
+| Q42–Q49 | epoll/Reactor/HTTP/粘包 | 网络 | ★ |
+| Q76 | MemTable 何时 flush？触发条件 | 存储 | ★ |
+| Q77 | SSTable 为什么不可变？ | 存储 | ★ |
+| Q78 | Group Commit 原理与吞吐提升 | 存储 | |
+| Q79 | Snappy vs Zstd 压缩选型 | 存储 | |
+| Q80 | Block Cache 淘汰策略 | 存储 | |
+| Q81 | 写放大 10x 如何排查？ | 存储 | ★ |
+| Q82 | TitanKV Gateway 中间件执行顺序 | 项目 | ★ |
+| Q83 | JWT 结构；access 与 refresh 区别 | 项目 | ★ |
+| Q84 | RBAC 权限模型；kv:put 如何校验 | 项目 | ★ |
+| Q85 | 反向代理 vs 正向代理 | 网络 | |
+| Q86 | SSE vs WebSocket vs 长轮询 | 网络 | ★ |
+| Q87 | Go channel 有缓冲 vs 无缓冲 | Go | ★ |
+| Q88 | Go GC 三色标记；STW 优化 | Go | |
+| Q89 | goroutine 调度：GMP 模型 | Go | ★ |
+| Q90 | Next.js SSR vs CSR vs RSC | 前端 | |
+| Q91 | TanStack Query 缓存策略 | 前端 | |
+| Q92 | Redis 限流 Lua 脚本为何原子 | 项目 | ★ |
+| Q93 | 服务发现：etcd watch 机制 | 分布式 | |
+| Q94 | Raft 日志匹配性质（Log Matching） | 分布式 | ★ |
+| Q95 | Raft 脑裂如何避免？ | 分布式 | ★ |
+| Q96 | PreVote 解决什么问题？ | 分布式 | ★ |
+| Q97 | 一致性哈希节点上下线如何迁移？ | 分布式 | ★ |
+| Q98 | 热点 key 如何处理？ | 分布式 | ★ |
+| Q99 | 分布式事务 2PC 缺陷 | 分布式 | ★ |
+| Q100 | Percolator 模型简述 | 分布式 | |
+| Q101 | minikv 崩溃恢复完整流程 | 存储 | ★ |
+| Q102 | 如何给 TitanKV 做 benchmark？ | 工程 | |
+| Q103 | clang-tidy 在项目中的规则 | 工程 | |
+| Q104 | Docker Compose 本地栈有哪些组件 | 工程 | |
+| Q105 | 你如何 debug 一次 502 反代失败？ | 工程 | ★ |
+
+### 三面 · 架构与领导力（约 25 题）
+
+| # | 题目 | 模块 | ★ |
+|---|------|------|---|
+| Q50–Q55 | 系统设计：KV/锁/限流/Raft/分片/MQ | 系统设计 | ★ |
+| Q106 | 设计支持 1 亿 QPS 的 KV（全球多活） | 系统设计 | ★ |
+| Q107 | 设计微博热搜榜（TopK） | 系统设计 | ★ |
+| Q108 | 设计短链服务 | 系统设计 | |
+| Q109 | 设计延迟队列 | 系统设计 | |
+| Q110 | TiKV vs CockroachDB vs FoundationDB 对比 | 架构 | ★ |
+| Q111 | 存算分离 vs 存算一体 | 架构 | |
+| Q112 | 云原生下 StatefulSet 部署 KV 注意点 | 架构 | |
+| Q113 | 如何做技术选型评审？ | 领导力 | |
+| Q114 | 线上故障复盘模板（ blameless ） | 领导力 | |
+| Q115 | 带新人落地 TitanKV 模块的分工 | 领导力 | |
+| Q116 | 技术债：何时该还、何时该忍 | 领导力 | |
+| Q117 | 跨团队推进接口标准化的经验 | 领导力 | |
+| Q118 | SLO/SLI/SLA 在 KV 系统如何定义 | 架构 | ★ |
+| Q119 | 成本优化：SSD 寿命与 Compaction | 架构 | |
+| Q120 | 未来 6 个月 TitanKV 路线图优先级 | 项目 | ★ |
+
+> **统计**：详解 Q1–Q55（见 §2）+ 索引 Q56–Q120 + 手撕 S1–S7 + 思考题 10 道 = **110+ 题**。
+
+---
 
 ## 1. 核心知识
 
@@ -913,15 +1106,99 @@ RSC 水合不一致问题：服务端渲染数据 + 客户端再请求可能不�
 
 ---
 
+### 2.10 一面补充（Q56–Q75 精选详解）
+
+**Q56.** 进程与线程区别？上下文切换成本？
+
+**A56.** 进程是资源分配单位（独立地址空间）；线程是调度单位（共享进程地址空间）。切换成本：线程只需切换寄存器+栈指针；进程还需切换页表、刷新 TLB，成本高一个数量级。TitanKV：minikv 用线程池处理 Compaction，IO 线程与计算线程分离。
+
+**Q60.** TCP 三次握手、四次挥手？TIME_WAIT 作用？
+
+**A60.** 三次握手：SYN → SYN+ACK → ACK，确认双方收发能力。四次挥手：FIN → ACK → FIN → ACK，全双工需分别关闭。TIME_WAIT：主动关闭方等待 2MSL，确保最后 ACK 可达、旧报文过期。高并发短连接需 `SO_REUSEADDR` + 长连接。
+
+**Q66.** 快排/归并/堆排对比？
+
+**A66.**
+
+| 算法 | 平均 | 最坏 | 空间 | 稳定 |
+|------|------|------|------|------|
+| 快排 | O(n log n) | O(n²) | O(log n) | 否 |
+| 归并 | O(n log n) | O(n log n) | O(n) | 是 |
+| 堆排 | O(n log n) | O(n log n) | O(1) | 否 |
+
+LSM Compaction 归并多路有序文件，本质是多路归并。
+
+**Q70.** 单例模式几种写法？Meyers 为何线程安全？
+
+**A70.** ①懒汉双重检查（需 volatile/C++11 前不可靠）；②饿汉静态成员；③**Meyers**：`static T inst` 在 `instance()` 内，C++11 保证局部静态初始化线程安全（magic static）。推荐 Meyers，简洁且无泄漏。
+
+**Q73.** 左值、右值、将亡值？
+
+**A73.** 左值：有身份可取地址；右值：临时对象、字面量；将亡值：`std::move` 后的左值，即将被移动。`std::move` 转右值引用触发移动构造，避免深拷贝。minikv `Put(Slice key, std::string value)` 用值传递+移动接收外部数据。
+
+---
+
+### 2.11 二面补充（Q76–Q105 精选详解）
+
+**Q76.** MemTable 何时 flush？
+
+**A76.** 触发条件通常：①MemTable 大小超阈值（如 64MB）；②Immutable MemTable 数量过多；③手动 `Flush()`；③WAL 过大。flush 时 MemTable 转 Immutable，后台线程写成 SSTable 并更新 Manifest。
+
+**Q77.** SSTable 为什么不可变？
+
+**A77.** ①并发读无需锁（无写竞争）；②缓存友好；③Compaction 时直接合并文件。更新通过写新 SSTable + 删除旧文件（Manifest 记录），而非原地修改。
+
+**Q82.** TitanKV Gateway 中间件执行顺序？
+
+**A82.** `RequestID → Logger → Recover → RateLimit → Auth → RBAC → Handler/Proxy`。Recover 包在最外捕获 panic；Auth 在 RBAC 前注入 `user_id/role`；RateLimit 在鉴权前可防暴力破解。
+
+**Q89.** Go GMP 模型？
+
+**A89.** G（goroutine）、M（OS 线程）、P（逻辑处理器，持有 runqueue）。M 必须绑定 P 才能执行 G。GOMAXPROCS 控制 P 数量。网络 IO 时 G 挂起，M 可执行其他 G，实现高并发。
+
+**Q94.** Raft 日志匹配性质？
+
+**A94.** 若两日志在 index i 处 term 相同，则 1..i 完全相同。AppendEntries 一致性检查：Follower 拒绝 term/index 不匹配项，Leader 递减 nextIndex 重试，保证日志单调一致。
+
+**Q98.** 热点 key 如何处理？
+
+**A98.** ①客户端缓存；②key 加随机后缀分散到多分片；③读热点用只读副本；④本地 LRU（TitanKV 规划 Block Cache）；⑤PD 检测热点自动 split + 迁移。
+
+**Q101.** minikv 崩溃恢复完整流程？
+
+**A101.** ①读 Manifest 重建 VersionSet；②扫描 WAL 从 last_sequence 重放；③恢复 MemTable（或从 WAL 重建）；④校验 SSTable checksum；⑤打开 DB 服务读请求。Manifest 尾部 CRC 失败记录丢弃（torn write 容忍）。
+
+---
+
+### 2.12 三面补充（Q106–Q120 架构题要点）
+
+**Q106.** 设计支持 1 亿 QPS 的全球多活 KV？
+
+**A106.** ①分区：一致性哈希/Range 上万分片；②多活：每地域独立写，异步复制+Causal consistency 或 LWW；③缓存：CDN 边缘缓存读；④路由：Global Load Balancer + 本地 PD；⑤冲突：版本向量/时间戳；⑥观测：跨地域 trace。CAP：多活通常选 AP，接受短暂不一致。
+
+**Q110.** TiKV vs CockroachDB vs FoundationDB？
+
+**A110.**
+
+| 系统 | 存储 | 一致性 | 特点 |
+|------|------|--------|------|
+| TiKV | RocksDB | Percolator 事务 | PD 调度，Rust，CNCF |
+| CockroachDB | Pebble | Serializable | SQL 优先，全球表 |
+| FoundationDB | 自定义 | Serializable | 苹果收购，严格事务 |
+
+TitanKV 学习路径：先 minikv 单机 → Raft 复制 → PD 分片，对标 TiKV 简化版。
+
+**Q118.** KV 系统 SLO 如何定义？
+
+**A118.** SLI：Put/Get P99 延迟、可用性（成功请求比）、durability（RPO=0）。SLO 例：99.95% 可用、P99 Get < 10ms、RPO=0 RTO<30s。错误预算驱动发布节奏。
+
+---
+
 ## 附：面试准备 checklist
 
-- [ ] 简历：项目用 STAR 写（Situation / Task / Action / Result），量化（QPS/延迟/优化幅度）。
+- [ ] 简历：项目用 STAR 写（Situation / Task / Action / Result），量化（QPS/延迟/优化幅度）。见 **§0.2**。
 - [ ] 自我介绍：30 秒 / 1 分钟 / 3 分钟三版本。
-- [ ] C++ 基础：本模块 Q1-Q10 全部能讲。
-- [ ] C++ 并发：Q11-Q18 + 手撕线程池。
-- [ ] 数据结构：LeetCode 1206/146/460 必刷 + 手撕。
-- [ ] 存储引擎：LSM/B+/WAL/Compaction/MVCC 能画图。
-- [ ] 网络：epoll LT/ET 必讲 + 手撕 epoll 服务器。
-- [ ] 系统设计：5 步法熟记 + 至少 3 个完整设计（KV / 锁 / 限流）。
-- [ ] 项目：能讲清 TitanKV 整体架构 + 自己负责模块的细节 + 遇到的问题与解决。
+- [ ] 一面：Q1–Q18、Q24–Q28、Q56–Q75、手撕 S1–S7。
+- [ ] 二面：Q32–Q41、Q76–Q105、项目链路（Gateway→Data→minikv）。
+- [ ] 三面：Q50–Q55、Q106–Q120、技术选型与 SLO。
 - [ ] 反问：团队规模 / 技术栈 / 业务方向 / 个人成长。

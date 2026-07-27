@@ -61,7 +61,7 @@ Every module follows a unified structure: **Background & Motivation → Core Kno
 | 5 网络 / Networking | 09-10 | epoll + C++20 协程 + HTTP 反向代理 / epoll + C++20 coroutines + HTTP reverse proxy |
 | 6 分布式 / Distributed | 11 | Raft 共识 + 一致性哈希分片 / Raft consensus + consistent-hash sharding |
 | 7 应用 / Application | 12 | Go 微服务 + Next.js 控制台 / Go µServices + Next.js console |
-| 8 面试 / Interview | 13 | 50+ 真题 + 系统设计 + 手撕专题 / 50+ real questions + system design + hand-write series |
+| 8 面试 / Interview | 13 | 110+ 真题 + 系统设计 + 手撕专题 / 110+ questions + system design + hand-write series |
 | 9 复现 / Reproduction | 14 | 从空目录复现整个 TitanKV / Rebuild the entire TitanKV from an empty directory |
 
 ---
@@ -98,8 +98,8 @@ Every module follows a unified structure: **Background & Motivation → Core Kno
    Hands-on exercises map to real TitanKV source. Read alongside and build/run locally.
 3. 「自检」用于检验掌握程度，先独立作答再对照参考答案。
    "Self-Check" verifies mastery. Answer independently first, then compare with the reference answer.
-4. 模块 13 汇总 50+ 道真实面试题（含 LeetCode 题号与手撕题），用于求职冲刺。
-   Module 13 condenses 50+ real interview questions (with LeetCode numbers and hand-write problems) for job-search crunch.
+4. 模块 13 汇总 110+ 道真实面试题（含 LeetCode 题号、一面/二面/三面索引与手撕题），用于求职冲刺。
+   Module 13 condenses 110+ real interview questions (with LeetCode numbers, round-1/2/3 index, and hand-write problems) for job-search crunch.
 5. 模块 14 要求从空目录复现整个项目，建议边学边在另一个仓库复现当周内容。
    Module 14 asks you to rebuild the entire project from an empty directory. We suggest reproducing each week's content in another repo as you learn.
 
@@ -114,12 +114,12 @@ docs/course/
 │   ├── README.md        中文大纲 / Chinese syllabus
 │   ├── 00-cross-platform-env.md   （规划中 / planned）
 │   ├── 01-overview.md … 13-interview.md
-│   └── 14-rebuild-from-scratch.md （规划中 / planned）
+│   └── 14-reproduce.md
 └── en/                  English docs
     ├── README.md        English syllabus
     ├── 00-cross-platform-env.md   (planned)
     ├── 01-overview.md … 13-interview.md
-    └── 14-rebuild-from-scratch.md (planned)
+    └── 14-reproduce.md
 ```
 
 ---
