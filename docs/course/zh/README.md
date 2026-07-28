@@ -112,7 +112,7 @@ flowchart TD
 | 10 | HTTP 与反向代理 | 网络 | `skynet/src/http/` / `skynet/src/proxy/` | ⭐⭐⭐⭐ | 6h | HTTP/1.1 状态机 / Router / 连接池 / 负载均衡 / 健康检查 | ✅ 已完成 |
 | 11 | Raft 共识与分片 | 分布式 | `distributed/`（规划中）/ `services/meta/watcher.go` | ⭐⭐⭐⭐⭐ | 10h | Leader 选举 / 日志复制 / 安全性 / Snapshot / PreVote / 一致性哈希分片 | 🚧 进行中 |
 | 12 | Go 微服务与 Next.js 控制台 | 应用 | `services/` / `gateway/` / `web/` | ⭐⭐⭐⭐ | 8h | Gin 网关 / JWT·RBAC·APIKey / gRPC / Next.js + TanStack Query + SSE 仪表盘 | ✅ 已完成 |
-| 13 | 系统设计与面试题汇总 | 面试 | 全项目 + `tests/course/` | ⭐⭐⭐ | 6h | 设计 KV / 分布式锁 / 限流器 / LeetCode 1206·146·460 / 110+ 真题 / 手撕专题 | ✅ 已完成 |
+| 13 | 系统设计与面试题汇总 | 面试 | 全项目 + `tests/course/` | ⭐⭐⭐ | 6h | 设计 KV / 分布式锁 / 限流器 / LeetCode 1206·146·460 / 110+ 真题 / 手撕专题 / [项目真实题四段式](./13-interview-project.md) | ✅ 已完成 |
 | 14 | 从零复现整个项目 | 复现 | 全项目（端到端） | ⭐⭐⭐⭐⭐ | 20h+ | 项目脚手架 / 子系统拆分 / CI / 部署 / 全链路压测 / 简历与面试串讲 | 🚧 进行中 |
 
 ---
@@ -141,7 +141,7 @@ flowchart TD
 我们用 Go 微服务（gateway / auth / data / meta / observability）+ Next.js 控制台把整个系统串起来：JWT/RBAC/APIKey 鉴权、gRPC 服务间通信、TanStack Query + SSE 实时仪表盘。这是简历里最直观的项目展示部分。
 
 ### 阶段八 · 面试篇（Module 13）
-我们把前面所有模块浓缩成 **110+ 道**真实面试题：系统设计题（设计 KV / 分布式锁 / 限流器）、LeetCode 题号题（1206 跳表 / 146 LRU / 460 LFU）、牛客面经、手撕专题（跳表 / LRU / 线程池 / 智能指针 / epoll 服务器），并按一面/二面/三面分级索引。求职冲刺阶段，每天刷两三道就够。
+我们把前面所有模块浓缩成 **110+ 道**真实面试题：系统设计题（设计 KV / 分布式锁 / 限流器）、LeetCode 题号题（1206 跳表 / 146 LRU / 460 LFU）、牛客面经、手撕专题（跳表 / LRU / 线程池 / 智能指针 / epoll 服务器），并按一面/二面/三面分级索引。二面项目深挖题（P36–P50）按 **满分答案 / 知识点 / 眼前一亮 / 串联图** 四段式写在 [13-interview-project.md](./13-interview-project.md)，答案基于本仓库真实实现边界（非 RocksDB Titan 插件）。求职冲刺阶段，每天刷两三道就够。
 
 ### 阶段九 · 复现篇（Module 14）
 最后一篇，我们从空目录开始，重新搭一遍整个 TitanKV：项目脚手架、子系统拆分、CI 流水线、Docker/K8s 部署、全链路压测、简历与面试串讲。**只有自己复现一遍，知识才算真正内化。** 这也是这门课区别于「看一遍就忘」的最大特征。

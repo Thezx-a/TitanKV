@@ -1,7 +1,8 @@
 # Module 13 — 系统设计与面试题汇总解析
 
 > 题源：LeetCode 真题（1206/146/460/707/380/381）、牛客面经、CSDN 大厂汇总、TiKV/RocksDB 官方文档、etcd Raft 文档、Stanford CS244b、LevelDB 源码注释
-> 项目映射：每题标注对应 TitanKV 模块，便于「以题带学」
+> 项目映射：每题标注对应 TitanKV 模块，便于「以题带学」  
+> **项目真实题满分答法（四段式）**：[13-interview-project.md](./13-interview-project.md)（P36–P50）
 
 ## 背景与动机
 
@@ -56,11 +57,11 @@
 
 ### 0.4 技术亮点（差异化，区别于「调库项目」）
 
-1. **真·手写存储引擎**：非 RocksDB 封装，含 SkipList/Bloom/WAL/SSTable/Compaction 完整链路。
-2. **双 C++ 子系统**：minikv（存储）+ skynet（网络）可独立编译测试，体现工程拆分能力。
-3. **全栈可运行**：C++ 单测 + Go 微服务 + Next.js 控制台，`curl` 与浏览器均可验证。
-4. **面试闭环**：每模块映射源码 + LeetCode 手撕 + 系统设计五步法，Module 14 端到端复现。
-5. **可观测性预埋**：Prometheus metrics、Jaeger trace、Grafana 仪表盘（`deploy/dev/`）。
+1. **真·手写存储引擎**：非 RocksDB 封装，含 SkipList/Bloom/WAL/SSTable/Manifest 完整链路（Compaction 合并主体仍在演进）。
+2. **双 C++ 子系统**：minikv（存储）+ skynet（网络，epoll **ET** + 协程）可独立编译测试。
+3. **全栈可运行**：C++ 单测 + Go 微服务 MVP + Next.js 控制台；**Data 服务尚未挂接 minikv**（Phase 2）。
+4. **面试闭环**：每模块映射源码 + 手撕 + 系统设计；项目深挖题见 [13-interview-project.md](./13-interview-project.md) 四段式答法。
+5. **可观测性预埋**：Prometheus / Jaeger / Grafana（`deploy/dev/`）；线上 QPS 数字需自测，勿抄空表。
 6. **现代 C++ 实践**：RAII、移动语义、`shared_mutex`、`co_await`、对称转移、enum class。
 
 ### 0.5 量化指标（可写进简历，按你实测填写）
@@ -178,6 +179,8 @@
 | Q103 | clang-tidy 在项目中的规则 | 工程 | |
 | Q104 | Docker Compose 本地栈有哪些组件 | 工程 | |
 | Q105 | 你如何 debug 一次 502 反代失败？ | 工程 | ★ |
+| **P36–P50** | **项目真实问题满分答法（架构/ABI/KV分离/锁/ASan/压测…）** | **项目** | **★** |
+| | → 全文见 [13-interview-project.md](./13-interview-project.md) | | |
 
 ### 三面 · 架构与领导力（约 25 题）
 
@@ -200,7 +203,7 @@
 | Q119 | 成本优化：SSD 寿命与 Compaction | 架构 | |
 | Q120 | 未来 6 个月 TitanKV 路线图优先级 | 项目 | ★ |
 
-> **统计**：详解 Q1–Q55（见 §2）+ 索引 Q56–Q120 + 手撕 S1–S7 + 思考题 10 道 = **110+ 题**。
+> **统计**：详解 Q1–Q55（见 §2）+ 索引 Q56–Q120 + 手撕 S1–S7 + 项目真实题 P36–P50（[附册](./13-interview-project.md)）+ 思考题 10 道 = **110+ 题**。
 
 ---
 
@@ -212,6 +215,24 @@
 - **分布式 CAP 三选二**：CP（如 etcd/ZK）vs AP（如 Cassandra）vs CA（单机）。TitanKV 元数据 CP，限流 AP。
 - **面试三件套**：自我介绍（项目 STAR）、白板题（前述四步）、反问环节（团队/技术栈/晋升）。
 - **手撕常考**：跳表、LRU、LFU、线程池、智能指针、单例、epoll 服务器、生产消费队列、无锁队列、限流器。
+
+### 1.1 标准答题结构（全文统一 · 四段式）
+
+> 项目深挖题、存储/架构题优先按此结构组织口述；旧版「Axx. 一段话」视为速记卡，完整范本见 [13-interview-project.md](./13-interview-project.md)。
+
+| 段落 | 目的 | 时长建议 |
+|------|------|----------|
+| **1. 满分答案** | 先给结论 + 本仓库真实实现边界，再讲机制与取舍 | 60–90s |
+| **2. 涉及知识点** | 点名术语（可中英对照），证明不是背简历 | 15s |
+| **3. 面试官眼前一亮的点** | 诚实边界 / 对比工业界 / 可量化或可复现证据 | 20s |
+| **4. 知识点串联图** | 口述时在白板上画数据流或组件依赖 | 30s |
+
+**真实判断红线（防打脸）**：
+
+1. TitanKV ≠ PingCAP TiKV Titan（RocksDB KV 分离插件）；本仓库是 **从零 LSM 教学引擎**。
+2. **未实现**：Blob / KV 分离 / Blob GC / 与 RocksDB 的 `.so` 插件 / 正式 Backup API / 填好的 QPS 表。
+3. **已实现**：WAL、SkipList MemTable、SST+压缩、Bloom、Manifest、InternalKey、GoogleTest、skynet **epoll ET** + 协程、Go 网关 MVP（Data 仍为内存 map）。
+4. 简历与口述只写已落地能力；规划中的功能用「演进路线」表述。
 
 ---
 
@@ -569,14 +590,7 @@ LSM-Tree 选 SkipList 做 MemTable：实现简单、范围扫描友好、并发�
 
 **Q33.** WAL 为什么必要？fsync 时机如何选？
 
-**A33.**
-- WAL（Write-Ahead Log）：写前先记录「准备做」的操作，崩溃后重放恢复。
-- 不写 WAL：MemTable 数据未刷盘，崩溃丢失。
-- fsync 时机：
-  - 每条都 fsync：强一致但慢（fsync ~5ms）。
-  - 异步 fsync：批量提交，吞吐高，可能丢最近数据。
-  - group commit：批量 fsync 一组，平衡。
-  - LevelDB 默认异步，RocksDB 可配置。
+**A33.** 速记：无 WAL 则 MemTable 崩溃即丢；fsync 是持久性边界（每条 / 批量 / group commit）。**四段式完整版 + 本仓库「先 MemTable 后 WAL」简化说明**见 §2.13 P-范本 2 与 [附册](./13-interview-project.md)。
 
 **Q34.** SSTable 文件格式为什么这样设计？minikv 的格式是什么？
 
@@ -622,10 +636,7 @@ DataBlock：`[crc(4)][physical_size(4)][uncompressed_size(4)][type(1)][payload]`
 
 **Q38.** Manifest 持久化解决什么问题？minikv 怎么做？
 
-**A38.** Manifest 记录 Version 元数据（哪些 SSTable 属于哪层）。重启时通过 Manifest 重建 Version，否则会丢失已有 SSTable 列表。minikv [manifest.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/manifest.h)：
-- 追加写：`[crc(4)][size(4)][payload]`，每条记录一个 add/del/reset。
-- 重启时重放 Manifest 重建 Version。
-- 撕裂写容忍：尾部 CRC 失败的记录被忽略（torn write）。
+**A38.** 速记：记录各层 SST 列表；追加写 `[crc][size][payload]`；尾部 CRC 失败丢弃。**四段式完整版**见 §2.13 P-范本 3。
 
 **Q39.** Bloom Filter 在 LSM-Tree 中怎么用？为什么不是「读每个 SSTable 都查 Bloom」？
 
@@ -675,7 +686,7 @@ epoll 用红黑树存所有 fd，就绪 fd 进入就绪链表，`epoll_wait` 只
 - LT：只要 fd 有数据可读就一直触发，每次 `epoll_wait` 都返回。简单。
 - ET：fd 状态变化时触发一次，必须一次读完所有数据（循环 read 到 EAGAIN）。高效（减少 epoll_wait 调用次数），但易漏数据。
 - ET 必须配合非阻塞 fd + 循环读，否则部分数据未读 + 下次不再触发 → 死锁。
-- minikv [io_context.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/net/io_context.h) 默认 LT，简单可靠。
+- skynet [io_context.cpp](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/src/net/io_context.cpp) 注册时带 **`EPOLLET`（边缘触发）**，必须非阻塞 + 读到 `EAGAIN`；教学叙述里若写 LT 以源码为准。
 
 **Q44.** Reactor 模式？为什么 main reactor + sub reactor？
 
@@ -972,15 +983,131 @@ public:
 |---|---|---|---|
 | C++ 基础 | Slice / Status / Varint | [slice.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/slice.h)、[status.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/status.h)、[coding.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/coding.h) | M02 |
 | C++ 并发 | SkipList / ThreadPool / LRUCache | [skip_list.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h)、[thread_pool.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/thread_pool.h)、[lru_cache.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/lru_cache.h) | M03 |
-| Go / TS | gateway / web | （规划中） | M04 / M12 |
+| Go / TS | gateway / web | MVP 已通；Data 仍为内存 map | M04 / M12 |
 | 跳表 | MemTable | [skip_list.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h) | M05 |
 | Bloom / Hash | BloomFilter / MurmurHash | [bloom_filter.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/bloom_filter.h)、[hash.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/hash.h) | M06 |
 | LSM-Tree | DBImpl / SSTable | [db_impl.cpp](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.cpp)、[sstable_builder.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/sstable_builder.h) | M07 |
-| Compaction / MVCC | CompactionManager / InternalKey | [compaction.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/compaction.h)、[internal_key.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/internal_key.h) | M08 |
-| epoll / 协程 | IOContext / Task | [io_context.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/net/io_context.h)、[task.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/core/task.h) | M09 |
+| Compaction / MVCC | CompactionManager / InternalKey | [compaction.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/compaction.h)（合并主体偏 stub）、[internal_key.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/internal_key.h) | M08 |
+| epoll / 协程 | IOContext / Task | [io_context.cpp](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/src/net/io_context.cpp)（**ET**）、[task.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/core/task.h) | M09 |
 | HTTP / 代理 | HttpParser / LoadBalancer | [parser.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/http/parser.h)、[load_balancer.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/proxy/load_balancer.h) | M10 |
 | Raft / 分片 | distributed/ | （规划中） | M11 |
-| Go 微服务 | gateway / services | （规划中） | M12 |
+| Go 微服务 | gateway / services | MVP：`gateway` + auth/data/meta/obs | M12 |
+| **项目深挖 P36–P50** | 全栈真实边界 | **[13-interview-project.md](./13-interview-project.md)**（四段式满分答法） | M13 |
+
+---
+
+## 2.13 项目真实问题速览（P36–P50）
+
+> **完整「满分答案 / 知识点 / 亮点 / 串联图」见附册**：[13-interview-project.md](./13-interview-project.md)。此处仅作二面目录与结论索引。
+
+| # | 题目焦点 | 本仓库真实结论（一句话） |
+|---|----------|--------------------------|
+| P36 | 架构 / CMake / 目录 | monorepo：`minikv`+`skynet`+Go+Next；**CMake** 管 C++，Makefile 管全栈 |
+| P37 | RocksDB 插件 / ABI | **不是插件**；无 `.so` 挂载；讲 ABI 时用「假设做插件」对比 |
+| P38 | KV 分离写序 / rename | **未实现分离**；工业界：先 Blob 再索引；`rename` 同目录原子发布 |
+| P39 | 大 Value 少拷贝 | 用 **`Slice` + move**；无 Arena；忌视图悬空 |
+| P40 | vs RocksDB QPS | **无实测数字**；用 `bench_db`+`chrono`+`perf` 自测再写简历 |
+| P41 | 最难 Bug / ASan | 典型：`Slice` 悬空；`ENABLE_SANITIZERS`；Manifest CRC 丢尾 |
+| P42 | WriteBatch / Hook | 自有 `WriteBatch`+WAL 编码；统一入口 `DBImpl::write` |
+| P43 | Blob GC / punch hole | **无 Blob GC**；空间回收靠 Compaction（仍待补全） |
+| P44 | 锁 | `write_mutex_` 串行写；MemTable/SkipList **`shared_mutex`** |
+| P45 | bad_alloc / ENOSPC | 变 `Status` 拒写保读；热路径少用异常 |
+| P46 | 单测 | **GoogleTest**；偏真实临时文件，非 Mock RocksDB |
+| P47 | 毛刺排查 | C++→`perf`；Go→pprof；先看 fsync/锁/flush |
+| P48 | vs WiscKey mmap | 本项目 SST **pread+解压**；辩证 mmap 缺页成本 |
+| P49 | 依赖 | GTest+Snappy/Zstd；**无 Boost/RocksDB/spdlog** |
+| P50 | Backup | 无 Backup API；`restoreFrom`≠业务备份；可用 `filesystem` 设计 |
+
+下面用四段式改写三道「最常被追问」的旧题，作为主文档范本（其余项目题见附册）。
+
+### P-范本 1（原 Q101）minikv 崩溃恢复完整流程？
+
+#### 1. 满分答案
+
+`DBImpl::open` / `recover` 顺序：
+
+1. `Manifest::open` → 重放 `[crc][size][payload]`，CRC 失败的**尾部记录丢弃**（容忍 torn write）  
+2. `version_.restoreFrom(manifest_->levels())` 重建各层 SST 列表  
+3. 打开 `wal.log`，`WAL::replay()` 得到记录，写回 **MemTable**，推进 `seq_`  
+4. 此后才服务读写；flush 成功后 `wal_->truncate()`
+
+不是「先 WAL 再 Manifest」：必须先知道磁盘上有哪些 SST，再把未刷盘的 WAL 补进内存。
+
+#### 2. 涉及知识点
+
+- Write-Ahead Log；Manifest / VersionSet；torn write；CRC  
+- 持久化顺序与崩溃一致性不变量
+
+#### 3. 面试官眼前一亮的点
+
+- 能解释「丢弃尾部坏记录」为何是正确而非数据丢失（该记录从未成功发布）  
+- 主动对比：若已实现 KV 分离，恢复后还需扫孤儿 Blob（本仓库未做）
+
+#### 4. 知识点串联图
+
+```mermaid
+flowchart TD
+  Open[DB open] --> MF[Manifest replay]
+  MF --> Ver[Version 重建SST列表]
+  Ver --> WAL[WAL replay]
+  WAL --> MT[MemTable 恢复]
+  MT --> Serve[开始服务]
+```
+
+### P-范本 2（原 Q33/写路径）WAL 为什么必要？本项目怎么写？
+
+#### 1. 满分答案
+
+MemTable 只在内存，进程崩溃即失；WAL 把写操作追加到磁盘，恢复时 replay。  
+本项目：`WAL::append` / `sync`（`fdatasync`）/ `replay` / `truncate`。  
+**诚实点**：源码写路径存在「先 MemTable 后 WAL」的教学简化；工业界严格 **先 WAL 再改内存**。`options_.wal_sync && opts.sync` 时才 `fsync`，否则只到 Page Cache。
+
+#### 2. 涉及知识点
+
+- durability；group commit；Page Cache vs 稳定存储  
+- `write(2)` vs `fdatasync(2)`
+
+#### 3. 面试官眼前一亮的点
+
+- 自己揭短「顺序简化」，并说出正确顺序——比假装完美更加分  
+- 联系 flush 后 truncate：SST+Manifest 已持久，WAL 可丢
+
+#### 4. 知识点串联图
+
+```mermaid
+flowchart LR
+  Put --> WAL
+  Put --> MemTable
+  MemTable --> Flush[flush SST]
+  Flush --> Manifest
+  Manifest --> Trunc[truncate WAL]
+```
+
+### P-范本 3（原 Q38）Manifest 解决什么？为何追加写？
+
+#### 1. 满分答案
+
+Manifest 记录「哪一层有哪个 SST 文件」（`kAdd` / `kDel` / `kReset`），重启靠它重建 Version。追加写 + 整记录 CRC：顺序 IO、实现简单、崩溃时只可能坏最后一条。过大时应用 `kReset`+当前快照做 compact（重写）。源码：`manifest.h`。
+
+#### 2. 涉及知识点
+
+- VersionEdit 思想；不可变 SST；元数据与数据分离
+
+#### 3. 面试官眼前一亮的点
+
+- 对比「目录 ls 扫 SST」：无事务性、难表达删除与层级  
+- 与 WAL 类比：都是 log-structured 元数据
+
+#### 4. 知识点串联图
+
+```mermaid
+flowchart TD
+  Flush[flush/compaction] --> Rec[Manifest recordAdd/Del]
+  Rec --> Disk[追加 crc+payload]
+  Crash[进程崩溃] --> Replay[重放至尾]
+  Replay --> Drop[丢弃坏尾记录]
+  Drop --> Levels[内存 levels_ 一致]
+```
 
 ---
 
@@ -1166,7 +1293,7 @@ LSM Compaction 归并多路有序文件，本质是多路归并。
 
 **Q101.** minikv 崩溃恢复完整流程？
 
-**A101.** ①读 Manifest 重建 VersionSet；②扫描 WAL 从 last_sequence 重放；③恢复 MemTable（或从 WAL 重建）；④校验 SSTable checksum；⑤打开 DB 服务读请求。Manifest 尾部 CRC 失败记录丢弃（torn write 容忍）。
+**A101.** 四段式完整版见 **§2.13 P-范本 1** 与 [13-interview-project.md](./13-interview-project.md)。要点：Manifest 重建 Version → WAL 重放进 MemTable → 尾部 CRC 失败记录丢弃（torn write）。
 
 ---
 
@@ -1196,9 +1323,10 @@ TitanKV 学习路径：先 minikv 单机 → Raft 复制 → PD 分片，对标 
 
 ## 附：面试准备 checklist
 
-- [ ] 简历：项目用 STAR 写（Situation / Task / Action / Result），量化（QPS/延迟/优化幅度）。见 **§0.2**。
-- [ ] 自我介绍：30 秒 / 1 分钟 / 3 分钟三版本。
+- [ ] 简历：项目用 STAR 写（Situation / Task / Action / Result），量化仅写**已实测**数字。见 **§0.2**；边界见 [附册诚实地图](./13-interview-project.md)。
+- [ ] 自我介绍：30 秒 / 1 分钟 / 3 分钟三版本；主动澄清「非 RocksDB Titan 插件」。
 - [ ] 一面：Q1–Q18、Q24–Q28、Q56–Q75、手撕 S1–S7。
-- [ ] 二面：Q32–Q41、Q76–Q105、项目链路（Gateway→Data→minikv）。
+- [ ] 二面：Q32–Q41、**P36–P50 附册四段式**、Q76–Q105、项目链路（Gateway→Data→minikv 现状要诚实）。
 - [ ] 三面：Q50–Q55、Q106–Q120、技术选型与 SLO。
+- [ ] 答题结构：①满分答案 ②涉及知识点 ③眼前一亮 ④串联图（§1.1）。
 - [ ] 反问：团队规模 / 技术栈 / 业务方向 / 个人成长。
