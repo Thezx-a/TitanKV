@@ -1,8 +1,15 @@
 ﻿#include "core/compaction.h"
+#include "core/internal_key.h"
 #include "core/sstable_builder.h"
+#include "core/sstable_iterator.h"
+#include "core/sstable_reader.h"
+#include <sys/stat.h>
 #include <unistd.h>
+#include <algorithm>
 #include <chrono>
 #include <iostream>
+#include <map>
+#include <vector>
 
 namespace minikv {
 namespace core {
@@ -41,35 +48,74 @@ Status CompactionManager::compactL0() {
     auto l0_files = version_->getLevelFiles(0);
     if (l0_files.empty()) return Status::Ok();
 
-    // Simplified: merge all L0 files into a single new L1 file
-    std::vector<std::pair<uint64_t, std::pair<std::string, std::string>>> merged;
-
+    // Collect all (internal_key, value) from L0, then keep newest per user_key.
+    // InternalKey sort: user_key asc, seq desc — first hit wins for each user_key.
+    std::vector<std::pair<std::string, std::string>> all;
     for (const auto& path : l0_files) {
         auto reader = SSTableReader::open(path);
         if (!reader) continue;
-        // Would iterate reader entries here and merge
+        std::shared_ptr<SSTableReader> shared(std::move(reader));
+        SSTableIterator it(shared);
+        it.seekToFirst();
+        while (it.valid()) {
+            all.emplace_back(it.key().toString(), it.value().toString());
+            it.next();
+        }
+        if (!it.status().ok()) return it.status();
     }
 
-    // Create new SSTable at L1
-    std::string newFile = db_path_ + "/level-1/" + std::to_string(
-        version_->nextFileNumber()) + ".sst";
+    std::sort(all.begin(), all.end(), [](const auto& a, const auto& b) {
+        return InternalKeyCompare(Slice(a.first), Slice(b.first)) < 0;
+    });
+
+    std::string level1_dir = db_path_ + "/level-1";
+    ::mkdir(level1_dir.c_str(), 0755);
+
+    std::string newFile =
+        level1_dir + "/" + std::to_string(version_->nextFileNumber()) + ".sst";
     SSTableBuilder builder(newFile, block_size_);
-    // Would add merged entries here
-    builder.finish();
 
-    // Update version: remove old L0 files, add new L1 file
-    version_->removeLevelFiles(0, l0_files);
+    std::string last_user;
+    size_t kept = 0;
+    for (const auto& kv : all) {
+        Slice ik(kv.first);
+        Slice uk = InternalKeyUserKey(ik);
+        std::string uks = uk.toString();
+        if (uks == last_user) continue;  // older version of same key
+        last_user = uks;
+        // Drop tombstones at L0→L1 when no older live version remains in this
+        // compaction input set (newest is deletion ⇒ key is gone).
+        if (InternalKeyType(ik) == ValueType::kDeletion) continue;
+        Status s = builder.add(ik, uk, Slice(kv.second));
+        if (!s.ok()) return s;
+        ++kept;
+    }
+
+    Status fs = builder.finish();
+    if (!fs.ok()) {
+        ::unlink(newFile.c_str());
+        return fs;
+    }
+
+    // Crash-safe publish order: new SST visible in Manifest first, then drop L0,
+    // then unlink. Empty output is valid (all keys deleted).
+    if (kept == 0) {
+        ::unlink(newFile.c_str());
+        version_->removeLevelFiles(0, l0_files);
+        for (const auto& path : l0_files) ::unlink(path.c_str());
+        return Status::Ok();
+    }
+
     version_->addLevelFile(1, newFile);
-
-    // Delete old L0 SSTable files
+    version_->removeLevelFiles(0, l0_files);
     for (const auto& path : l0_files) ::unlink(path.c_str());
 
     return Status::Ok();
 }
 
 Status CompactionManager::compactLevel(int level) {
-    // L_n -> L_n+1 compaction
-    // Similar to compactL0 but for L1+
+    // Teaching MVP: only L0→L1 is implemented. L1+ left for leveled follow-up.
+    (void)level;
     return Status::Ok();
 }
 

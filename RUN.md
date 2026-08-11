@@ -129,11 +129,14 @@ make run-all
 
 ```bash
 curl -s http://127.0.0.1:8080/ping
+
+> `make run-all` 现在：对外 **:8080 = skynet 前置反向代理** → Gin `:18080` → Data/Auth…。单独跑 Gin 仍是 `make run-gateway`（默认 :8080）。
 ```
 
 | 服务 | 端口 |
 |------|------|
-| Gateway | 8080 |
+| Gateway（对外 skynet 前置） | 8080 |
+| Gin（内网，run-all 时） | 18080 |
 | Data | 8081 |
 | Auth | 8082 |
 | Meta | 8083 |
@@ -201,5 +204,5 @@ make web-dev          # 终端 2（可选）
 C++ 引擎单独验证：
 
 ```bash
-./build/minikv/minikv_server
+./build/minikv/minikv_server --host 0.0.0.0 --port 8888 --io-threads 4 --biz-threads 4
 ```

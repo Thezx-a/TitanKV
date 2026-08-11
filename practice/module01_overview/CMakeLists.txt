@@ -1,0 +1,18 @@
+# Module 01 —— 环境搭建与项目概览：最小 KV 调用链
+cmake_minimum_required(VERSION 3.20)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  project(module01_overview LANGUAGES CXX)
+  set(CMAKE_CXX_STANDARD 17)
+  set(CMAKE_CXX_STANDARD_REQUIRED ON)
+  enable_testing()
+endif()
+
+add_executable(module01_overview main.cpp)
+if(NOT CMAKE_CXX_STANDARD)
+  set_property(TARGET module01_overview PROPERTY CXX_STANDARD 17)
+  set_property(TARGET module01_overview PROPERTY CXX_STANDARD_REQUIRED ON)
+endif()
+if(MSVC)
+  target_compile_options(module01_overview PRIVATE /utf-8)
+endif()
+add_test(NAME module01_overview COMMAND module01_overview)

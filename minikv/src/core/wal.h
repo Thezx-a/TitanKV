@@ -17,9 +17,11 @@ public:
     Status append(const Slice& data);
     Status sync();
     std::vector<std::string> replay();
+    // Low-level reset of this file (tests). DB flush path prefers a new WAL file.
     Status truncate();
 
     bool exists() const;
+    const std::string& path() const { return path_; }
 
 private:
     std::string path_;

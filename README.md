@@ -143,7 +143,7 @@ graph TB
 titan-kv/
 ├── minikv/              # C++17 LSM-Tree 存储引擎 / C++17 LSM-Tree storage engine
 │   ├── src/core/        #   WAL / MemTable / SSTable / Compaction / MVCC
-│   ├── src/network/     #   原生网络层（epoll + connection）
+│   ├── src/network/     #   原生网络层（epoll 主从 Reactor + connection）
 │   ├── src/utils/       #   coding / crc32 / hash / lru_cache / thread_pool
 │   ├── tests/           #   GoogleTest 单元测试
 │   └── benches/        #   Google Benchmark 基准
@@ -195,17 +195,17 @@ titan-kv/
 |---|---|---|
 | Phase 0 | 清理 + 仓库重构 / Cleanup + repo restructure | ✅ done |
 | Phase 1 | C++ 存储引擎升级（MVCC / WAL / Compaction / CF） / C++ storage engine upgrade | ✅ done |
-| Phase 2 | C++ gRPC server + Go cgo 客户端 / C++ gRPC server + Go cgo client | ⏳ planned |
+| Phase 2 | C++ 引擎接入 Go Data（TCP 协议 / 规划中的 gRPC） | ✅ **MVP done** — `MINIKV_ADDR` → `minikv_server` 原生 TCP；gRPC/cgo 仍为后续增强 |
 | Phase 3 | Go API 网关 + Auth 服务（JWT/RBAC/APIKey） / Go gateway + auth | ✅ **MVP done** — `gateway/` + `services/auth/` |
-| Phase 4 | Go data / meta / observability 服务 / Go data/meta/observability | ✅ **MVP done** — `services/{meta,observability}/` + `client-go/` |
-| Phase 5 | 分布式层：etcd + hashicorp/raft + 分片 / Distributed layer | ⏳ planned |
+| Phase 4 | Go data / meta / observability 服务 / Go data/meta/observability | ✅ **MVP done** — Data 默认可接 minikv；无 `MINIKV_ADDR` 时回退内存 |
+| Phase 5 | 分布式层：hashicorp/raft（教学 1-node）+ 分片规划 | ✅ **1-node Raft done** — `distributed/`；多节点/分片仍为规划 |
 | Phase 6 | Next.js 管理控制台 / Next.js admin console | ✅ **MVP done** — `web/` (App Router + TanStack Query) |
 | Phase 7 | 可观测性 + Kubernetes + CI/CD / Observability + K8s + CI/CD | ⏳ planned |
 | Phase 8 | CLI 工具 + 多语言 SDK + 文档 / CLI + SDK + docs | ⏳ planned |
 
-> **MVP 说明 / MVP note**：Phase 3/4/6 的 data 服务目前使用内存存储，observability 使用 mock 指标，但已能通过 `make run-all` + `make web-dev` 完整跑通端到端。Phase 2 完成后，内存后端将被真正的 LSM-Tree 引擎替换。
+> **MVP 说明 / MVP note**：`make run-all` 会启动 `minikv_server`，Data 服务通过 `MINIKV_ADDR` 持久化到 LSM。Observability 仍有 mock 指标。Raft 为教学用单节点，不是多机生产集群。
 >
-> Phase 3/4/6 use in-memory storage (data service) and mock metrics (observability), but run end-to-end via `make run-all` + `make web-dev`. Phase 2 will replace the in-memory backing store with the real LSM-Tree engine.
+> `make run-all` starts `minikv_server`; Data persists via `MINIKV_ADDR`. Observability metrics may still be mocked. Raft is a teaching 1-node group, not a multi-host cluster.
 
 ---
 

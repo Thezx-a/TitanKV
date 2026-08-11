@@ -81,6 +81,8 @@ Classic variants:
 2. **Single Reactor multi thread**: main thread accept + IO; workers handle business.
 3. **Main-sub Reactor multi thread** (muduo default): main Reactor only accepts; sub Reactors handle IO; business goes to a thread pool.
 
+**Repo today (`minikv_server`)**: Main only accepts, Subs do connection IO (default `--io-threads 4`), epoll **LT** (`EPOLLIN` only); `db_` runs on a business pool (default `--biz-threads 4`) and writeback uses `queueInLoop` on the owning Sub. skynet remains **ET + coroutines**; do not mix the two.
+
 Key components: EventLoop (IOContext), Channel (fd+events+callback), Acceptor, TcpConnection, ThreadPool.
 
 skynet's `Executor` ([executor.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/core/executor.h)) is the EventLoop + coroutine scheduler.

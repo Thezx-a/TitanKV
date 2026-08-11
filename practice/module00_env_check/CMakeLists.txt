@@ -1,0 +1,18 @@
+# Module 00 —— 跨平台环境搭建：工具链自检
+cmake_minimum_required(VERSION 3.20)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  project(module00_env_check LANGUAGES CXX)
+  set(CMAKE_CXX_STANDARD 17)
+  set(CMAKE_CXX_STANDARD_REQUIRED ON)
+  enable_testing()
+endif()
+
+add_executable(module00_env_check main.cpp)
+if(NOT CMAKE_CXX_STANDARD)
+  set_property(TARGET module00_env_check PROPERTY CXX_STANDARD 17)
+  set_property(TARGET module00_env_check PROPERTY CXX_STANDARD_REQUIRED ON)
+endif()
+if(MSVC)
+  target_compile_options(module00_env_check PRIVATE /utf-8)
+endif()
+add_test(NAME module00_env_check COMMAND module00_env_check)

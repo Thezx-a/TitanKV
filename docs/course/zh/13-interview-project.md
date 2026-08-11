@@ -12,12 +12,13 @@
 |--------------|-------------------|
 | TitanKV = RocksDB Titan 插件 | **否**。品牌名 TitanKV；引擎是自研 LevelDB 风格 LSM（`minikv/`），**未链接 RocksDB** |
 | 已做 KV 分离 / Blob / Blob GC | **否**。Value 仍在 MemTable + SSTable DataBlock |
-| Compaction 生产级 | **部分**：有后台线程与 L0 触发；合并主体多为 stub |
-| Data 服务已打通 minikv | **否**。Go `services/data` 当前是内存 `map`；gRPC/cgo 接引擎属 Phase 2 |
-| 有公开 QPS 数字 | **否**。`benchmark.md` 为空模板；需自测再写简历 |
-| 已实现 | WAL / MemTable(SkipList) / SST+压缩 / Bloom / Manifest / InternalKey / `shared_mutex` / GoogleTest / skynet epoll(**ET**)+协程 / Gin 网关 MVP |
+| Compaction 生产级 | **部分**：已实现真实 L0→L1 归并去重；L1+ leveled 全套与生产调优未做 |
+| Data 服务已打通 minikv | **是（TCP MVP）**。设 `MINIKV_ADDR=host:port` 即走 `minikv_server`；未设则回退内存。gRPC/cgo 仍未做 |
+| 有公开 QPS 数字 | **有自测**：`minikv/docs/benchmark.md`（本机 TCP Put≈1.1万 ops/s，Get≈3.3k）；勿当生产对比 |
+| Raft 多副本 | **仅教学 1-node**（`distributed/` + hashicorp/raft）；无多机选举/分片调度 |
+| 已实现 | WAL（flush 后 truncate **并重新打开**）/ MemTable(SkipList) / SST+压缩 / Bloom / Manifest **追加日志**（recover **不再**写 kReset）/ InternalKey / L0→L1 Compaction / `shared_mutex` / GoogleTest / skynet epoll+协程 / Gin 网关 / Data↔minikv TCP / 1-node Raft |
 
-面试话术口诀：**「我做的是教学级从零 LSM，对标 LevelDB/RocksDB 子集；名字里的 Titan 是产品品牌，不是 PingCAP Titan 插件。若聊 KV 分离，我按 WiscKey/Titan 设计讲方案，并说明本仓库尚未落地。」**
+面试话术口诀：**「教学级从零 LSM，对标 LevelDB/RocksDB 子集；Titan 是品牌名不是 PingCAP 插件；Data 已通过原生 TCP 接到引擎并可崩溃恢复；Raft 只做了单节点教学骨架，多机共识与分片还没做。」**
 
 ---
 
@@ -42,7 +43,7 @@ minikv/
   include/minikv/     # 对外 API：db.h / slice.h / status.h …
   src/core/           # WAL MemTable SST Manifest Compaction
   src/utils/          # coding hash lru thread_pool
-  src/network/        # 简易 epoll server（与 skynet 独立）
+  src/network/        # 主从 Reactor epoll server（与 skynet 独立）
   tests/              # GoogleTest
 skynet/
   include/skynet/ …   src/ …   tests/

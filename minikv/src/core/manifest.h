@@ -24,8 +24,9 @@ namespace core {
 //     file_no  : 8 bytes (LE uint64) — Monotonic id assigned by Version
 //     path_len : 4 bytes (LE uint32)
 //     path     : path_len bytes (raw)
-// kReset records simply mark that the database is freshly opened; payload
-// contains only `type` (no body). Used as a soft marker.
+// kReset records simply mark a soft clear of the in-memory SST roster on
+// replay. Prefer rewriteSnapshot() (new MANIFEST with full kAdd snapshot)
+// over appending an empty kReset during recover.
 //
 // Recovery:
 //   Read records sequentially, verify CRC, apply to in-memory levels
@@ -47,6 +48,11 @@ public:
     Status recordReset();
     Status sync();
 
+    // After recover() replay: archive old MANIFEST -> MANIFEST.bak, write a fresh
+    // MANIFEST that contains ONLY kAdd for every currently-live SST (full snapshot).
+    // Future flush/compaction edits append to this new file. Avoids empty kReset.
+    Status rewriteSnapshot();
+
     // Snapshot of currently-tracked SSTables per level.
     const std::vector<std::vector<SSTableMeta>>& levels() const { return levels_; }
     size_t totalFiles() const;
@@ -62,7 +68,10 @@ private:
     };
     Status writeRecord(RecordType type, int level,
                        const std::string& path, uint64_t file_no);
+    Status writeRecordToFd(int fd, RecordType type, int level,
+                           const std::string& path, uint64_t file_no);
     Status replay();
+    void recoverActivePathUnlocked();  // prefer MANIFEST, else MANIFEST.new, else bak
 
     std::string manifest_path_;
     int        fd_ = -1;

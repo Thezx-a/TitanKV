@@ -81,6 +81,8 @@ ET 模式注意点：
 2. **单 Reactor 多线程**：主线程 accept + IO，工作线程处理业务。
 3. **主从 Reactor 多线程**（muduo 默认）：主 Reactor 只 accept，子 Reactor 处理 IO，业务丢线程池。
 
+**仓库现状（minikv_server）**：Main 只 accept，Sub 做连接 IO（默认 `--io-threads 4`），epoll **LT**（只挂 `EPOLLIN`）；`db_` 在业务池（默认 `--biz-threads 4`）跑，写回 `queueInLoop` 到所属 Sub。skynet 仍是 **ET + 协程**，两条线不要混。
+
 关键组件：EventLoop（IOContext）、Channel（fd+事件+回调）、Acceptor、TcpConnection、ThreadPool。
 
 skynet 的 `Executor`（[executor.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/core/executor.h)）即 EventLoop + 协程调度器。

@@ -34,9 +34,19 @@ private:
     Status flushMemTable();
     Status recover();
 
+    // One MemTable generation <-> one WAL file (wal-<N>.log). Flush deletes old files.
+    std::string makeWalPath(uint64_t file_number) const;
+    std::vector<std::pair<uint64_t, std::string>> listWalFiles() const;
+    Status openWal(uint64_t file_number);
+    Status rotateWal();
+    Status replayWalFile(const std::string& path);
+
     Options options_;
     std::string db_path_;
     std::unique_ptr<WAL>      wal_;
+    std::string               current_wal_path_;
+    // WALs whose data is fully covered by the memtable about to flush / just flushed.
+    std::vector<std::string>  obsolete_wal_paths_;
     std::unique_ptr<Manifest> manifest_;
     std::unique_ptr<MemTable> memtable_;
     std::unique_ptr<MemTable> immutable_memtable_;

@@ -499,7 +499,10 @@ epoll stores all fds in a RB-tree; ready fds enter a ready list; `epoll_wait` re
 
 **Q44.** Reactor pattern? Why main reactor + sub reactor?
 
-**A44.** Reactor: event-driven; IO multiplex watches fds; callbacks handle ready events. main reactor only does accept (one thread); sub reactors handle read/write of connected fds (multiple threads). This way accept isn't blocked by business logic; even connection storms still get accepted. Nginx / Netty / skynet all use this.
+**A44.** Reactor: event-driven; IO multiplex watches fds; callbacks handle ready events. main reactor only does accept (one thread); sub reactors handle read/write of connected fds (multiple threads). This way accept isn't blocked by business logic; even connection storms still get accepted.
+- **This repo `minikv_server`**: main + sub is implemented (default `--io-threads 4`, epoll **LT** with `EPOLLIN` only; cross-thread handoff via `eventfd` + `runInLoop`). Business runs on `--biz-threads` (default 4); writeback must `queueInLoop` to the owning Sub — never `write(fd)` from a pool thread.
+- **skynet**: epoll **ET** + C++20 coroutines — not the same main/sub Reactor. Don't equate it with muduo.
+- Industry: Nginx / Netty / muduo.
 
 **Q45.** Zero-copy techniques? What does sendfile / splice / mmap solve?
 

@@ -142,3 +142,47 @@ TEST(ManifestTest, TruncatedTailRecordIsIgnored) {
     }
     cleanup(dir);
 }
+
+// rewriteSnapshot archives the old log and writes a compact kAdd-only MANIFEST.
+TEST(ManifestTest, RewriteSnapshotCompactsAndKeepsLiveFiles) {
+    std::string dir = uniqueDir();
+    ::mkdir(dir.c_str(), 0755);
+    {
+        Manifest m(dir);
+        ASSERT_TRUE(m.open().ok());
+        ASSERT_TRUE(m.recordAddFile(0, "/data/a.sst", 1).ok());
+        ASSERT_TRUE(m.recordAddFile(0, "/data/b.sst", 2).ok());
+        ASSERT_TRUE(m.recordRemoveFile(0, "/data/a.sst", 1).ok());
+        ASSERT_TRUE(m.recordAddFile(1, "/data/c.sst", 3).ok());
+        ASSERT_TRUE(m.sync().ok());
+        ASSERT_TRUE(m.rewriteSnapshot().ok());
+        // Live set: b @ L0, c @ L1
+        ASSERT_EQ(m.levels().at(0).size(), 1u);
+        EXPECT_EQ(m.levels().at(0)[0].path, "/data/b.sst");
+        ASSERT_EQ(m.levels().at(1).size(), 1u);
+        EXPECT_EQ(m.levels().at(1)[0].path, "/data/c.sst");
+    }
+    // Archived log should exist; active MANIFEST replays to the same live set.
+    {
+        struct stat st;
+        EXPECT_EQ(::stat((dir + "/MANIFEST.bak").c_str(), &st), 0);
+        Manifest m(dir);
+        ASSERT_TRUE(m.open().ok());
+        ASSERT_EQ(m.levels().at(0).size(), 1u);
+        EXPECT_EQ(m.levels().at(0)[0].path, "/data/b.sst");
+        ASSERT_EQ(m.levels().at(1).size(), 1u);
+        EXPECT_EQ(m.levels().at(1)[0].path, "/data/c.sst");
+        // Further edits append to the new file.
+        ASSERT_TRUE(m.recordAddFile(0, "/data/d.sst", 4).ok());
+        ASSERT_TRUE(m.sync().ok());
+    }
+    {
+        Manifest m(dir);
+        ASSERT_TRUE(m.open().ok());
+        ASSERT_EQ(m.levels().at(0).size(), 2u);
+        EXPECT_EQ(m.levels().at(0)[1].path, "/data/d.sst");
+    }
+    // cleanup also removes bak if present
+    ::unlink((dir + "/MANIFEST.bak").c_str());
+    cleanup(dir);
+}

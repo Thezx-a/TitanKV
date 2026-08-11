@@ -39,6 +39,7 @@ add_library(minikv STATIC
     src/core/manifest.cpp
     src/core/internal_key.cpp
     src/network/event_loop.cpp
+    src/network/event_loop_thread.cpp
     src/network/server.cpp
     src/network/connection.cpp
     src/utils/crc32.cpp
@@ -51,6 +52,8 @@ target_include_directories(minikv PUBLIC
 )
 
 target_compile_features(minikv PUBLIC cxx_std_17)
+find_package(Threads REQUIRED)
+target_link_libraries(minikv PUBLIC Threads::Threads)
 apply_compiler_warnings(minikv)
 apply_sanitizers(minikv)
 

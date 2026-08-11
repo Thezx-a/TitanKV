@@ -6,12 +6,17 @@
 #include "core/compression.h"
 #include "core/internal_key.h"
 #include "utils/coding.h"
+#include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <cctype>
+#include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <algorithm>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace minikv {
@@ -49,13 +54,100 @@ Status DBImpl::recover() {
     version_.setManifest(manifest_.get());
     version_.restoreFrom(manifest_->levels());
 
-    (void)manifest_->recordReset();
-    (void)manifest_->sync();
+    // Compact Manifest: archive old append log as MANIFEST.bak and rewrite a
+    // fresh MANIFEST that lists every live SST as kAdd (full snapshot).
+    // This is the safe alternative to empty kReset — old SSTs are re-recorded
+    // before any future edits append. Do NOT append empty kReset here.
+    Status snap = manifest_->rewriteSnapshot();
+    if (!snap.ok()) return snap;
 
-    std::string wal_path = db_path_ + "/wal.log";
-    wal_ = std::make_unique<WAL>(wal_path);
     memtable_ = std::make_unique<MemTable>(options_.memtable_size);
-    auto records = wal_->replay();
+
+    auto wals = listWalFiles();
+    for (const auto& [num, path] : wals) {
+        version_.ensureNextFileNumberAtLeast(num + 1);
+        Status rs = replayWalFile(path);
+        if (!rs.ok()) return rs;
+    }
+
+    if (wals.empty()) {
+        Status os = openWal(version_.nextFileNumber());
+        if (!os.ok()) return os;
+    } else {
+        // Continue appending to the newest WAL; older files stay until next flush.
+        current_wal_path_ = wals.back().second;
+        wal_ = std::make_unique<WAL>(current_wal_path_);
+        obsolete_wal_paths_.clear();
+        for (size_t i = 0; i + 1 < wals.size(); ++i) {
+            obsolete_wal_paths_.push_back(wals[i].second);
+        }
+    }
+    return Status::Ok();
+}
+
+std::string DBImpl::makeWalPath(uint64_t file_number) const {
+    return db_path_ + "/wal-" + std::to_string(file_number) + ".log";
+}
+
+std::vector<std::pair<uint64_t, std::string>> DBImpl::listWalFiles() const {
+    std::vector<std::pair<uint64_t, std::string>> out;
+
+    // Legacy single-file WAL (pre multi-WAL): treat as generation 0.
+    std::string legacy = db_path_ + "/wal.log";
+    struct stat st;
+    if (::stat(legacy.c_str(), &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0) {
+        out.emplace_back(0, legacy);
+    }
+
+    DIR* dir = ::opendir(db_path_.c_str());
+    if (dir) {
+        while (dirent* ent = ::readdir(dir)) {
+            const char* name = ent->d_name;
+            // Match wal-<digits>.log
+            if (std::strncmp(name, "wal-", 4) != 0) continue;
+            const char* p = name + 4;
+            if (!std::isdigit(static_cast<unsigned char>(*p))) continue;
+            char* end = nullptr;
+            unsigned long long num = std::strtoull(p, &end, 10);
+            if (!end || std::strcmp(end, ".log") != 0) continue;
+            out.emplace_back(static_cast<uint64_t>(num), db_path_ + "/" + name);
+        }
+        ::closedir(dir);
+    }
+
+    std::sort(out.begin(), out.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    return out;
+}
+
+Status DBImpl::openWal(uint64_t file_number) {
+    version_.ensureNextFileNumberAtLeast(file_number + 1);
+    current_wal_path_ = makeWalPath(file_number);
+    wal_ = std::make_unique<WAL>(current_wal_path_);
+    return Status::Ok();
+}
+
+Status DBImpl::rotateWal() {
+    // Create the new file first; only then retire the old path.
+    uint64_t n = version_.nextFileNumber();
+    std::string new_path = makeWalPath(n);
+    version_.ensureNextFileNumberAtLeast(n + 1);
+    auto new_wal = std::make_unique<WAL>(new_path);
+
+    if (wal_) {
+        (void)wal_->sync();
+    }
+    if (!current_wal_path_.empty()) {
+        obsolete_wal_paths_.push_back(current_wal_path_);
+    }
+    wal_ = std::move(new_wal);
+    current_wal_path_ = std::move(new_path);
+    return Status::Ok();
+}
+
+Status DBImpl::replayWalFile(const std::string& path) {
+    WAL wal(path);
+    auto records = wal.replay();
     for (const auto& record : records) {
         const char* p = record.data();
         const char* end = record.data() + record.size();
@@ -87,14 +179,15 @@ Status DBImpl::del(const WriteOptions& opts, const Slice& key) {
 
 Status DBImpl::write(const WriteOptions& opts, const WriteBatch& batch) {
     std::lock_guard<std::mutex> lock(write_mutex_);
-    uint64_t currentSeq = seq_.fetch_add(batch.count());
-    for (const auto& op : batch.ops()) {
-        uint64_t opSeq = ++currentSeq;
-        bool isDel = (op.type == BatchOpType::kDelete);
-        memtable_->put(Slice(op.key), Slice(op.value), opSeq, isDel);
-    }
+    // Reserve seq numbers up front. If WAL fails we may leave gaps — that is OK.
+    const size_t n = batch.count();
+    uint64_t baseSeq = seq_.fetch_add(n);
+
+    // 1) Write-Ahead Log first: durable on disk before MemTable is visible.
+    //    Crash after WAL succeeds / before MemTable apply → recover() replays WAL.
     if (wal_) {
         std::string data;
+        data.reserve(n * 16);
         for (const auto& op : batch.ops()) {
             data.push_back(static_cast<char>(static_cast<uint8_t>(op.type)));
             char lenBuf[4];
@@ -105,27 +198,41 @@ Status DBImpl::write(const WriteOptions& opts, const WriteBatch& batch) {
             data.append(op.key);
             data.append(op.value);
         }
-        wal_->append(Slice(data));
+        Status ws = wal_->append(Slice(data));
+        if (!ws.ok()) return ws;
         if (options_.wal_sync && opts.sync) {
             Status s = wal_->sync();
             if (!s.ok()) return s;
         }
+    }
+
+    // 2) Apply to MemTable only after WAL succeeded (or WAL disabled).
+    uint64_t currentSeq = baseSeq;
+    for (const auto& op : batch.ops()) {
+        uint64_t opSeq = ++currentSeq;
+        bool isDel = (op.type == BatchOpType::kDelete);
+        memtable_->put(Slice(op.key), Slice(op.value), opSeq, isDel);
     }
     maybeFlush();
     return Status::Ok();
 }
 
 Status DBImpl::get(const ReadOptions& opts, const Slice& key, std::string* value) {
-    auto result = memtable_->get(key, seq_.load());
-    if (result) {
-        *value = std::move(*result);
-        return Status::Ok();
-    }
-    if (immutable_memtable_) {
-        result = immutable_memtable_->get(key, seq_.load());
+    {
+        // Hold write_mutex_ only while touching memtable pointers so flush
+        // cannot swap unique_ptr under a Sub Reactor Get.
+        std::lock_guard<std::mutex> lock(write_mutex_);
+        auto result = memtable_->get(key, seq_.load());
         if (result) {
             *value = std::move(*result);
             return Status::Ok();
+        }
+        if (immutable_memtable_) {
+            result = immutable_memtable_->get(key, seq_.load());
+            if (result) {
+                *value = std::move(*result);
+                return Status::Ok();
+            }
         }
     }
     for (int level = 0; level <= options_.max_level; ++level) {
@@ -146,6 +253,12 @@ Status DBImpl::get(const ReadOptions& opts, const Slice& key, std::string* value
 void DBImpl::maybeFlush() {
     if (memtable_->shouldFlush()) {
         immutable_memtable_ = std::move(memtable_);
+        // New MemTable gets a brand-new WAL file (no truncate/reopen of the old one).
+        Status rs = rotateWal();
+        if (!rs.ok()) {
+            // Best-effort: keep serving with old WAL if rotate failed (should be rare).
+            std::cerr << "rotateWal failed: " << rs.message() << std::endl;
+        }
         memtable_ = std::make_unique<MemTable>(options_.memtable_size);
         flushMemTable();
     }
@@ -154,6 +267,11 @@ void DBImpl::maybeFlush() {
 Status DBImpl::flushMemTable() {
     if (!immutable_memtable_ || immutable_memtable_->empty()) {
         immutable_memtable_.reset();
+        // Empty generation: old WAL has nothing to replay; drop retired files.
+        for (const auto& path : obsolete_wal_paths_) {
+            ::unlink(path.c_str());
+        }
+        obsolete_wal_paths_.clear();
         return Status::Ok();
     }
     auto entries = immutable_memtable_->entries();
@@ -169,7 +287,12 @@ Status DBImpl::flushMemTable() {
     builder.finish();
     version_.addLevelFile(0, filePath);
     immutable_memtable_.reset();
-    if (wal_) wal_->truncate();
+
+    // Data now durable in SST: drop WAL files that belonged to this generation.
+    for (const auto& path : obsolete_wal_paths_) {
+        ::unlink(path.c_str());
+    }
+    obsolete_wal_paths_.clear();
     return Status::Ok();
 }
 
@@ -211,4 +334,9 @@ void DBImpl::compact() {
 }
 
 }  // namespace core
+
+Status DB::open(const Options& options, std::unique_ptr<DB>* dbptr) {
+    return core::DBImpl::open(options, dbptr);
+}
+
 }  // namespace minikv

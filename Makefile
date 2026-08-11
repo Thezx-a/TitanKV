@@ -13,7 +13,7 @@
 #   make run-data     # run data service (Phase 4)
 #   make run-meta     # run meta service (Phase 4)
 #   make run-observ   # run observability service (Phase 4)
-#   make run-all      # run all Go services in parallel
+#   make run-all      # run minikv + Go + skynet front proxy
 #   make web-install  # install Next.js deps
 #   make web-dev      # run Next.js dev server
 # =========================================================
@@ -79,15 +79,25 @@ go-lint: ## Run golangci-lint on all Go code
 # ---------------------------------------------------------
 # Run services (Phase 3 / Phase 4)
 # ---------------------------------------------------------
-.PHONY: run-gateway run-auth run-data run-meta run-observ run-all
-run-gateway: ## Run gateway service (Phase 3, port 8080)
+MINIKV_BIN  ?= $(CMAKE_BUILD_DIR)/minikv/minikv_server
+MINIKV_ADDR ?= 127.0.0.1:8888
+MINIKV_DB   ?= ./data/minikv_data
+MINIKV_PORT ?= 8888
+# 方案一：skynet 占对外 :8080，Gin 内网 :18080
+SKYNET_BIN          ?= $(CMAKE_BUILD_DIR)/skynet/skynet_gateway
+SKYNET_CONFIG       ?= $(CURDIR)/skynet/gateway/gateway.yaml
+GIN_INTERNAL_ADDR   ?= :18080
+PUBLIC_GATEWAY_PORT ?= 8080
+
+.PHONY: run-gateway run-auth run-data run-meta run-observ run-minikv run-skynet run-all
+run-gateway: ## Run Gin gateway alone (default :8080; behind skynet use GATEWAY_ADDR=:18080)
 	$(GO) run ./cmd/gateway
 
 run-auth: ## Run auth service (Phase 3, port 8082)
 	$(GO) run ./cmd/auth
 
-run-data: ## Run data service (Phase 4, port 8081)
-	$(GO) run ./cmd/data
+run-data: ## Run data service (Phase 4, port 8081); set MINIKV_ADDR to use C++ engine
+	MINIKV_ADDR=$(MINIKV_ADDR) $(GO) run ./cmd/data
 
 run-meta: ## Run meta service (Phase 4, port 8083)
 	$(GO) run ./cmd/meta
@@ -95,14 +105,30 @@ run-meta: ## Run meta service (Phase 4, port 8083)
 run-observ: ## Run observability service (Phase 4, port 8084)
 	$(GO) run ./cmd/observability
 
-run-all: ## Run all 5 Go services in parallel (use Ctrl+C to stop all)
-	@echo "Starting all services. Press Ctrl+C to stop."
-	@$(GO) run ./cmd/auth &
-	@$(GO) run ./cmd/data &
-	@$(GO) run ./cmd/meta &
-	@$(GO) run ./cmd/observability &
-	@$(GO) run ./cmd/gateway
-	@wait
+run-minikv: cmake-build ## Run C++ minikv_server (default :8888)
+	@mkdir -p $(MINIKV_DB)
+	$(MINIKV_BIN) --host 0.0.0.0 --port $(MINIKV_PORT) --db $(MINIKV_DB)
+
+run-skynet: cmake-build ## Run skynet front proxy (public :8080 → Gin :18080)
+	@test -x "$(SKYNET_BIN)" || $(MAKE) cmake-build
+	$(SKYNET_BIN) --config $(SKYNET_CONFIG)
+
+run-all: ## Run minikv + Go services + skynet front proxy (Ctrl+C stops all)
+	@echo "Starting minikv + Go + skynet front proxy. Public entry :$(PUBLIC_GATEWAY_PORT) → Gin $(GIN_INTERNAL_ADDR)"
+	@mkdir -p $(MINIKV_DB)
+	@if [ ! -x "$(MINIKV_BIN)" ] || [ ! -x "$(SKYNET_BIN)" ]; then $(MAKE) cmake-build; fi
+	@$(MINIKV_BIN) --host 127.0.0.1 --port $(MINIKV_PORT) --db $(MINIKV_DB) & echo $$! > /tmp/titankv-minikv.pid
+	@sleep 0.5
+	@MINIKV_ADDR=$(MINIKV_ADDR) $(GO) run ./cmd/auth & echo $$! > /tmp/titankv-auth.pid
+	@MINIKV_ADDR=$(MINIKV_ADDR) $(GO) run ./cmd/data & echo $$! > /tmp/titankv-data.pid
+	@$(GO) run ./cmd/meta & echo $$! > /tmp/titankv-meta.pid
+	@$(GO) run ./cmd/observability & echo $$! > /tmp/titankv-observ.pid
+	@GATEWAY_ADDR=$(GIN_INTERNAL_ADDR) $(GO) run ./cmd/gateway & echo $$! > /tmp/titankv-gin.pid
+	@sleep 1
+	@$(SKYNET_BIN) --config $(SKYNET_CONFIG) & echo $$! > /tmp/titankv-skynet.pid
+	@echo "PIDs saved under /tmp/titankv-*.pid  —  curl http://127.0.0.1:$(PUBLIC_GATEWAY_PORT)/ping"
+	@trap 'kill $$(cat /tmp/titankv-*.pid 2>/dev/null) 2>/dev/null; exit 0' INT TERM; \
+		while kill -0 $$(cat /tmp/titankv-skynet.pid) 2>/dev/null; do sleep 1; done
 
 # ---------------------------------------------------------
 # Frontend (Next.js, Phase 6)

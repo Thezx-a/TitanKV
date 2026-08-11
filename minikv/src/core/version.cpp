@@ -46,9 +46,32 @@ void Version::addLevelFile(int level, const std::string& path) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (level < 0) return;
     if (level >= static_cast<int>(levels_.size())) levels_.resize(level + 1);
-    uint64_t file_no = next_file_number_++;
+
+    // Prefer file number encoded in basename ("N.sst") so callers that already
+    // reserved a number via nextFileNumber() do not allocate a second id.
+    uint64_t file_no = 0;
+    bool from_path = false;
+    auto slash = path.find_last_of('/');
+    std::string base = (slash == std::string::npos) ? path : path.substr(slash + 1);
+    auto dot = base.find('.');
+    if (dot != std::string::npos && dot > 0) {
+        bool all_digits = true;
+        for (size_t i = 0; i < dot; ++i) {
+            if (base[i] < '0' || base[i] > '9') { all_digits = false; break; }
+        }
+        if (all_digits) {
+            file_no = 0;
+            for (size_t i = 0; i < dot; ++i) file_no = file_no * 10 + (base[i] - '0');
+            from_path = true;
+            uint64_t cur = next_file_number_.load();
+            while (file_no + 1 > cur) {
+                if (next_file_number_.compare_exchange_weak(cur, file_no + 1)) break;
+            }
+        }
+    }
+    if (!from_path) file_no = next_file_number_++;
+
     levels_[level].push_back({path, "", "", file_no, 0});
-    // Persist through Manifest if connected.
     if (manifest_) {
         (void)manifest_->recordAddFile(level, path, file_no);
         (void)manifest_->sync();
@@ -83,6 +106,13 @@ size_t Version::levelSize(int level) const {
 
 uint64_t Version::nextFileNumber() {
     return next_file_number_.fetch_add(1);
+}
+
+void Version::ensureNextFileNumberAtLeast(uint64_t min_next) {
+    uint64_t cur = next_file_number_.load();
+    while (cur < min_next) {
+        if (next_file_number_.compare_exchange_weak(cur, min_next)) break;
+    }
 }
 
 }  // namespace core

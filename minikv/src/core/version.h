@@ -38,6 +38,8 @@ public:
     bool shouldCompactL0() const;
     size_t levelSize(int level) const;
     uint64_t nextFileNumber();
+    // Ensure the next allocated number is >= min_next (does not return a number).
+    void ensureNextFileNumberAtLeast(uint64_t min_next);
 
 private:
     mutable std::mutex mutex_;

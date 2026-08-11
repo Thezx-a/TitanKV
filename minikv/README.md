@@ -166,6 +166,11 @@ MiniKV/
 │   │   ├── sstable.h        SSTable reader/writer
 │   │   ├── compaction.h     Merge logic
 │   │   └── bloom.h          Bloom filter
+│   ├── network/             Main/sub Reactor (epoll LT)
+│   │   ├── event_loop.h     epoll + eventfd runInLoop
+│   │   ├── event_loop_thread.h  Sub Reactor 线程池
+│   │   ├── server.h         accept 在 Main，连接在 Sub
+│   │   └── connection.h     粘包缓冲
 │   ├── table/               Table operations
 │   └── utils/               Utilities
 │       ├── coding.h         Varint encoding

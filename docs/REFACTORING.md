@@ -58,13 +58,15 @@
 - [ ] WP 1.2.6  Optimistic transactions (Begin/Commit/Rollback, OCC)
 - [ ] WP 1.2.7  Configurable compaction strategy (Leveled vs Size-tiered)
 
-## Phase 2 — C++ gRPC server + Go cgo client
+## Phase 2 — C++ engine ↔ Go Data (TCP MVP; gRPC later)
 
-- [ ] `proto/keyforge/storage.proto` defines Put/Get/Delete/WriteBatch/Scan/Txn
-- [ ] C++ gRPC server wraps `DBImpl`, served by SkyNet-based task dispatch
-- [ ] Go gRPC client (generated from proto)
-- [ ] Go `client-go/fast` cgo fallback for embedded mode
-- [ ] Benchmark: gRPC Get P50 < 500us, cgo Get P50 < 50us
+- [x] Native TCP protocol already in `minikv/src/network/` (Put/Get/Del + Scan)
+- [x] Go client `services/data/minikv_client.go` + `MINIKV_ADDR` wiring
+- [x] Fixed EventLoop UAF (copy callback before invoke) — connection close SIGSEGV
+- [x] Compaction L0→L1 actually merges entries (no longer empty stub)
+- [x] Local bench numbers in `minikv/docs/benchmark.md` + `scripts/bench_minikv.sh`
+- [x] Smoke: `scripts/e2e_smoke.sh`
+- [ ] `proto/` gRPC + cgo embedded mode (optional upgrade path)
 
 ## Phase 3 — Go API gateway + auth service
 
@@ -81,14 +83,15 @@
 - [ ] Observability service (metrics aggregation, health-rollup)
 - [ ] Go SDK `client-go` with typed errors and retries
 
-## Phase 5 — Distributed: etcd + hashicorp/raft + sharding
+## Phase 5 — Distributed: hashicorp/raft (1-node teaching) + sharding later
 
-- [ ] etcd service registration and discovery
-- [ ] `hashicorp/raft` node wrapping a local storage-engine
-- [ ] FSM Apply / Snapshot / Restore (SST-based snapshots)
-- [ ] Linearizable reads via ReadIndex
-- [ ] Consistent-hash sharding and online rebalance
-- [ ] Failover test: kill leader, verify election < 5s
+- [x] `distributed/` — 1-node raft bootstrap, FSM Apply Put/Del, Snapshot/Restore JSON
+- [x] Unit test elects leader + Put/Get (`go test ./distributed/...`)
+- [x] Optional `MINIKV_ADDR` forward after Apply (best-effort; Raft truth is in-memory FSM)
+- [ ] Multi-node join/leave + real quorum
+- [ ] etcd service discovery
+- [ ] Consistent-hash sharding / rebalance
+- [ ] Failover test across 3 nodes
 
 ## Phase 6 — Next.js admin console
 

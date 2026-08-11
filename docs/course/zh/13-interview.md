@@ -57,11 +57,11 @@
 
 ### 0.4 技术亮点（差异化，区别于「调库项目」）
 
-1. **真·手写存储引擎**：非 RocksDB 封装，含 SkipList/Bloom/WAL/SSTable/Manifest 完整链路（Compaction 合并主体仍在演进）。
-2. **双 C++ 子系统**：minikv（存储）+ skynet（网络，epoll **ET** + 协程）可独立编译测试。
-3. **全栈可运行**：C++ 单测 + Go 微服务 MVP + Next.js 控制台；**Data 服务尚未挂接 minikv**（Phase 2）。
+1. **真·手写存储引擎**：非 RocksDB 封装，含 SkipList/Bloom/WAL/SSTable/Manifest + **真实 L0→L1 Compaction**。
+2. **双 C++ 子系统**：minikv（存储）+ skynet（网络，epoll + 协程）可独立编译测试。
+3. **全栈可运行**：**Data 经 `MINIKV_ADDR` 接到 minikv_server**（TCP）；崩溃重启可恢复；另有教学用 1-node Raft。
 4. **面试闭环**：每模块映射源码 + 手撕 + 系统设计；项目深挖题见 [13-interview-project.md](./13-interview-project.md) 四段式答法。
-5. **可观测性预埋**：Prometheus / Jaeger / Grafana（`deploy/dev/`）；线上 QPS 数字需自测，勿抄空表。
+5. **可观测性预埋**：Prometheus / Jaeger / Grafana（`deploy/dev/`）；压测见 `minikv/docs/benchmark.md`（本机自测）。
 6. **现代 C++ 实践**：RAII、移动语义、`shared_mutex`、`co_await`、对称转移、enum class。
 
 ### 0.5 量化指标（可写进简历，按你实测填写）
@@ -690,7 +690,10 @@ epoll 用红黑树存所有 fd，就绪 fd 进入就绪链表，`epoll_wait` 只
 
 **Q44.** Reactor 模式？为什么 main reactor + sub reactor？
 
-**A44.** Reactor：事件驱动，IO 多路复用监听 fd，事件就绪时回调处理。main reactor 只处理 accept（一个线程），sub reactor 处理已连接 fd 的读写（多个线程）。这样 accept 不会被业务逻辑阻塞，连接风暴时仍能接收新连接。Nginx / Netty / skynet 都是此模式。
+**A44.** Reactor：事件驱动，IO 多路复用监听 fd，事件就绪时回调处理。main reactor 只处理 accept（一个线程），sub reactor 处理已连接 fd 的读写（多个线程）。这样 accept 不会被业务逻辑阻塞，连接风暴时仍能接收新连接。
+- **本仓库 `minikv_server`**：已落地 main + sub（默认 `--io-threads 4`，epoll **LT** 只挂 `EPOLLIN`；跨线程用 `eventfd` + `runInLoop` 轮询分发）。业务在 `--biz-threads`（默认 4）池里调 `db_`，写回必须 `queueInLoop` 回所属 Sub，禁止业务线程直接 `write(fd)`。
+- **skynet**：epoll **ET** + C++20 协程，不是这条主从 Reactor；面试别混成「skynet 就是 muduo」。
+- 工业界对照：Nginx / Netty / muduo。
 
 **Q45.** 零拷贝技术有哪些？sendfile / splice / mmap 各解决什么？
 

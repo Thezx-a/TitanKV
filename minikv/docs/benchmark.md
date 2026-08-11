@@ -1,30 +1,42 @@
 ﻿# MiniKV 压测报告
 
+> 实测日期: 2026-08-07 · WSL2 · 本地 loopback TCP（非生产数字）
+> 脚本: `scripts/bench_minikv.sh`
+> 复现: `make cmake-build && ./build/minikv/minikv_server --port 8888 --db /tmp/mk &`
+>       `./scripts/bench_minikv.sh 127.0.0.1:8888 5000`
+
 ## 环境
-- CPU: (待填充)
-- 磁盘: (待填充)
-- 编译: g++-12, -O2
 
-## SkipList Benchmark
+| 项 | 值 |
+|----|----|
+| CPU | 见下方 `nproc` / model（WSL 虚拟核） |
+| 磁盘 | WSL 虚拟盘（`/tmp`） |
+| 编译 | g++-12, CMake Release |
+| 协议 | MiniKV 原生 TCP（magic=`0x4D4B`） |
+| Value | 64B |
+| N | 5000 |
 
-| N (条数) | Put (ms) | Get (ms) | Memory (KB) |
-|----------|----------|----------|-------------|
-| 1,000    |          |          |             |
-| 10,000   |          |          |             |
-| 100,000  |          |          |             |
-| 1,000,000|          |          |             |
+## 端到端 TCP Benchmark（本机实测）
 
-## WAL Benchmark
+| 操作 | 吞吐 (ops/s) | 平均延迟 |
+|------|-------------|----------|
+| PUT  | **10961** | 91.2 µs |
+| GET  | **3352** | 298.4 µs |
 
-| 模式 | 吞吐 (ops/s) |
-|------|----------|
-| fsync ON  |     |
-| fsync OFF |     |
+说明：上表是 **2026-08-07 单线程 Reactor** 时的单连接同步请求。此后 `minikv_server` 已改为 main + sub Reactor（默认 `--io-threads 4`），上表数字未重跑，勿当作当前多连接吞吐。Get 仍受 MemTable/SST 查找影响。
+数字仅供简历「自测」引用，勿与 RocksDB 官方多线程压测横比。
 
-## 端到端 Benchmark
+## SkipList / WAL 分项
 
-| 操作 | 吞吐 (ops/s) | P50 | P99 |
-|------|----------|-----|-----|
-| PUT  |          |     |     |
-| GET  |          |     |     |
-| SCAN |          |     |     |
+（可选后续用 `minikv/benches/` Google Benchmark 补齐）
+
+| 项 | 状态 |
+|----|------|
+| SkipList microbench | 有 bench 目标，未写入本表 |
+| WAL fsync ON/OFF | 未单独测 |
+
+## 诚实边界
+
+- 未做多连接/流水线；未与 RocksDB 同条件对比
+- Data 服务经 Go HTTP 网关再转发时延迟会更高（另测）
+- Compaction 已实现真实 L0→L1 合并，但非生产 leveled 全套

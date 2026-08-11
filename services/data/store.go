@@ -1,62 +1,64 @@
 package data
 
 import (
+	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
 )
 
-// Store 是 data 服务的内存 KV 存储 (MVP).
-// 后续 Phase 2 会替换为 minikv LSM-Tree 引擎 (通过 cgo 桥接).
+// KVStore is the persistence backend for the data service.
+type KVStore interface {
+	Put(key, value string) error
+	Get(key string) (string, bool, error)
+	Delete(key string) error
+	Scan(start, end string) ([]KVPair, error)
+	Size() int
+	Backend() string
+	Close() error
+}
+
+// Store is the in-memory KV storage (MVP fallback).
 type Store struct {
 	mu   sync.RWMutex
 	data map[string]string
 }
 
-// NewStore 创建内存 KV 存储.
+// NewStore creates an in-memory KV store.
 func NewStore() *Store {
 	return &Store{data: make(map[string]string)}
 }
 
-// Put 写入 KV.
-func (s *Store) Put(key, value string) {
+func (s *Store) Put(key, value string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.data[key] = value
+	return nil
 }
 
-// Get 读取 KV. 返回 value 和是否存在.
-func (s *Store) Get(key string) (string, bool) {
+func (s *Store) Get(key string) (string, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	v, ok := s.data[key]
-	return v, ok
+	return v, ok, nil
 }
 
-// Delete 删除 KV. 返回是否删除了 (key 是否存在).
-func (s *Store) Delete(key string) bool {
+func (s *Store) Delete(key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.data[key]; !ok {
-		return false
-	}
 	delete(s.data, key)
-	return true
+	return nil
 }
 
-// KVPair 单条 key-value (与 client-go/titan/types.go 对齐).
+// KVPair is a single key-value (aligned with client-go/titan/types.go).
 type KVPair struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
 }
 
-// Scan 范围扫描. start/end 均为前缀闭区间语义:
-//   - start="" 表示从最小 key 开始
-//   - end="" 表示扫到最大 key
-//   - 否则扫描满足 start <= key < end 的所有 KV (按 key 升序).
-//
-// 注意: 这里采用 [start, end) 半开区间, 与 LevelDB / RocksDB 习惯一致.
-func (s *Store) Scan(start, end string) []KVPair {
+// Scan returns keys in [start, end) half-open interval.
+func (s *Store) Scan(start, end string) ([]KVPair, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -70,16 +72,69 @@ func (s *Store) Scan(start, end string) []KVPair {
 		}
 		out = append(out, KVPair{Key: k, Value: v})
 	}
-	// 按 key 升序, 便于客户端展示稳定.
 	sort.Slice(out, func(i, j int) bool {
 		return strings.Compare(out[i].Key, out[j].Key) < 0
 	})
-	return out
+	return out, nil
 }
 
-// Size 返回当前 KV 总数 (用于健康检查 / 指标).
 func (s *Store) Size() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.data)
+}
+
+func (s *Store) Backend() string { return "memory" }
+
+func (s *Store) Close() error { return nil }
+
+// MiniKVStore persists via C++ minikv_server (TCP binary protocol).
+type MiniKVStore struct {
+	client *MiniKVClient
+}
+
+func NewMiniKVStore(addr string) *MiniKVStore {
+	return &MiniKVStore{client: NewMiniKVClient(addr)}
+}
+
+func (s *MiniKVStore) Put(key, value string) error {
+	return s.client.Put(key, value)
+}
+
+func (s *MiniKVStore) Get(key string) (string, bool, error) {
+	return s.client.Get(key)
+}
+
+func (s *MiniKVStore) Delete(key string) error {
+	return s.client.Delete(key)
+}
+
+func (s *MiniKVStore) Scan(start, end string) ([]KVPair, error) {
+	return s.client.Scan(start, end)
+}
+
+func (s *MiniKVStore) Size() int {
+	// Engine has no cheap COUNT; healthz uses Backend() instead.
+	return -1
+}
+
+func (s *MiniKVStore) Backend() string { return "minikv" }
+
+func (s *MiniKVStore) Close() error { return s.client.Close() }
+
+// NewStoreFromEnv picks minikv when MINIKV_ADDR is set, else memory.
+// Example: MINIKV_ADDR=127.0.0.1:8888
+func NewStoreFromEnv() (KVStore, error) {
+	addr := os.Getenv("MINIKV_ADDR")
+	if addr == "" {
+		return NewStore(), nil
+	}
+	store := NewMiniKVStore(addr)
+	// Probe with a non-existent get to ensure the server is reachable.
+	_, _, err := store.Get("__titankv_health_probe__")
+	if err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("minikv unreachable at %s: %w", addr, err)
+	}
+	return store, nil
 }

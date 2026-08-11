@@ -66,11 +66,15 @@ std::vector<std::string> WAL::replay() {
 }
 
 Status WAL::truncate() {
+    // After a MemTable flush the log is durable in SST; reset the log file but
+    // keep an open append fd so later writes still hit disk.
     if (fd_ >= 0) {
         ::close(fd_);
         fd_ = -1;
     }
     ::unlink(path_.c_str());
+    fd_ = ::open(path_.c_str(), O_RDWR | O_CREAT | O_APPEND, 0644);
+    if (fd_ < 0) return Status::IOError("WAL reopen after truncate failed");
     return Status::Ok();
 }
 

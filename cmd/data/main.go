@@ -1,14 +1,9 @@
 // TitanKV Data service entry (Phase 4).
-// Start: go run ./cmd/data
+// Start: MINIKV_ADDR=127.0.0.1:8888 go run ./cmd/data
 // Port: 8081 (default)
 //
-// Routes:
-//
-//	POST   /api/data/kv
-//	GET    /api/data/kv?key=xxx
-//	DELETE /api/data/kv?key=xxx
-//	GET    /api/data/scan?start=&end=
-//	GET    /healthz
+// When MINIKV_ADDR is set, persists via C++ minikv_server.
+// Otherwise falls back to in-memory map.
 package main
 
 import (
@@ -28,7 +23,13 @@ import (
 func main() {
 	addr := getenv("DATA_ADDR", ":8081")
 
-	store := data.NewStore()
+	store, err := data.NewStoreFromEnv()
+	if err != nil {
+		log.Fatalf("store init: %v", err)
+	}
+	defer store.Close()
+	log.Printf("[INFO] data backend=%s MINIKV_ADDR=%q", store.Backend(), os.Getenv("MINIKV_ADDR"))
+
 	svc := data.NewService(store)
 
 	r := gin.New()
@@ -50,7 +51,7 @@ func main() {
 	log.Println("[INFO] data service shutting down...")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	srv.Shutdown(ctx)
+	_ = srv.Shutdown(ctx)
 }
 
 func getenv(key, def string) string {

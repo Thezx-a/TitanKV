@@ -10,6 +10,10 @@
     test_sstable_compression.cpp
     test_manifest.cpp
     test_internal_key.cpp
+    test_db_reopen.cpp
+    test_event_loop.cpp
+    test_server_reactor.cpp
+    test_connection_bizpool.cpp
 )
 target_link_libraries(minikv_tests PRIVATE minikv GTest::gtest_main)
 include(GoogleTest)
