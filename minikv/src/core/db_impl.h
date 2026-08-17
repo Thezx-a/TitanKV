@@ -48,8 +48,8 @@ private:
     // WALs whose data is fully covered by the memtable about to flush / just flushed.
     std::vector<std::string>  obsolete_wal_paths_;
     std::unique_ptr<Manifest> manifest_;
-    std::unique_ptr<MemTable> memtable_;
-    std::unique_ptr<MemTable> immutable_memtable_;
+    std::shared_ptr<MemTable> memtable_;
+    std::shared_ptr<MemTable> immutable_memtable_;
     std::atomic<uint64_t>     seq_;
     std::mutex                write_mutex_;
     Version                   version_;

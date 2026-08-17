@@ -61,7 +61,7 @@ Status DBImpl::recover() {
     Status snap = manifest_->rewriteSnapshot();
     if (!snap.ok()) return snap;
 
-    memtable_ = std::make_unique<MemTable>(options_.memtable_size);
+    memtable_ = std::make_shared<MemTable>(options_.memtable_size);
 
     auto wals = listWalFiles();
     for (const auto& [num, path] : wals) {
@@ -218,21 +218,29 @@ Status DBImpl::write(const WriteOptions& opts, const WriteBatch& batch) {
 }
 
 Status DBImpl::get(const ReadOptions& opts, const Slice& key, std::string* value) {
+    (void)opts;
+    std::shared_ptr<MemTable> mem, imm;
     {
-        // Hold write_mutex_ only while touching memtable pointers so flush
-        // cannot swap unique_ptr under a Sub Reactor Get.
+        // Copy shared_ptr (same control block, use_count +1) then unlock.
+        // Lookup is outside write_mutex_ so flush move/reset cannot UAF.
+        // Never reconstruct via shared_ptr<MemTable>(memtable_.get()).
         std::lock_guard<std::mutex> lock(write_mutex_);
-        auto result = memtable_->get(key, seq_.load());
+        mem = memtable_;
+        imm = immutable_memtable_;
+    }
+    const uint64_t snapshot_seq = seq_.load();
+    if (mem) {
+        auto result = mem->get(key, snapshot_seq);
         if (result) {
             *value = std::move(*result);
             return Status::Ok();
         }
-        if (immutable_memtable_) {
-            result = immutable_memtable_->get(key, seq_.load());
-            if (result) {
-                *value = std::move(*result);
-                return Status::Ok();
-            }
+    }
+    if (imm) {
+        auto result = imm->get(key, snapshot_seq);
+        if (result) {
+            *value = std::move(*result);
+            return Status::Ok();
         }
     }
     for (int level = 0; level <= options_.max_level; ++level) {
@@ -259,7 +267,7 @@ void DBImpl::maybeFlush() {
             // Best-effort: keep serving with old WAL if rotate failed (should be rare).
             std::cerr << "rotateWal failed: " << rs.message() << std::endl;
         }
-        memtable_ = std::make_unique<MemTable>(options_.memtable_size);
+        memtable_ = std::make_shared<MemTable>(options_.memtable_size);
         flushMemTable();
     }
 }
@@ -274,7 +282,8 @@ Status DBImpl::flushMemTable() {
         obsolete_wal_paths_.clear();
         return Status::Ok();
     }
-    auto entries = immutable_memtable_->entries();
+    auto flushing = immutable_memtable_;
+    auto entries = flushing->entries();
     std::string filePath = db_path_ + "/level-0/" +
         std::to_string(version_.nextFileNumber()) + ".sst";
     CompressionType ctype = static_cast<CompressionType>(options_.compression);
@@ -300,15 +309,22 @@ std::unique_ptr<Iterator> DBImpl::newIterator(const ReadOptions& opts) {
     (void)opts;
     std::vector<std::unique_ptr<Iterator>> children;
 
-    if (memtable_) {
-        auto live = memtable_->entries();
+    std::shared_ptr<MemTable> mem, imm;
+    {
+        std::lock_guard<std::mutex> lock(write_mutex_);
+        mem = memtable_;
+        imm = immutable_memtable_;
+    }
+
+    if (mem) {
+        auto live = mem->entries();
         auto it = std::make_unique<MemTableIterator>(std::move(live));
         it->seekToFirst();
         children.push_back(std::move(it));
     }
-    if (immutable_memtable_) {
-        auto imm = immutable_memtable_->entries();
-        auto it = std::make_unique<MemTableIterator>(std::move(imm));
+    if (imm) {
+        auto imm_entries = imm->entries();
+        auto it = std::make_unique<MemTableIterator>(std::move(imm_entries));
         it->seekToFirst();
         children.push_back(std::move(it));
     }

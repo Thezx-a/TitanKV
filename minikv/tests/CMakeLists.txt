@@ -1,4 +1,4 @@
-﻿add_executable(minikv_tests
+add_executable(minikv_tests
     test_skip_list.cpp
     test_bloom_filter.cpp
     test_slice.cpp
@@ -11,10 +11,12 @@
     test_manifest.cpp
     test_internal_key.cpp
     test_db_reopen.cpp
+    test_memtable_snapshot.cpp
     test_event_loop.cpp
     test_server_reactor.cpp
     test_connection_bizpool.cpp
 )
 target_link_libraries(minikv_tests PRIVATE minikv GTest::gtest_main)
+apply_sanitizers(minikv_tests)
 include(GoogleTest)
 gtest_discover_tests(minikv_tests)
