@@ -130,7 +130,7 @@ make run-all
 ```bash
 curl -s http://127.0.0.1:8080/ping
 
-> `make run-all` 现在：对外 **:8080 = skynet 前置反向代理** → Gin `:18080` → Data/Auth…。单独跑 Gin 仍是 `make run-gateway`（默认 :8080）。
+> `make run-all` 现在：对外 **:8080 = skynet 前置反向代理**（半包拼包 / 线程池 / SSE 流式 / 优雅退出）→ Gin `:18080` → Data/Auth…。单独跑 Gin 仍是 `make run-gateway`（默认 :8080）。验证前置：`make smoke-skynet`。
 ```
 
 | 服务 | 端口 |

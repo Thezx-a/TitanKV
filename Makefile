@@ -89,7 +89,7 @@ SKYNET_CONFIG       ?= $(CURDIR)/skynet/gateway/gateway.yaml
 GIN_INTERNAL_ADDR   ?= :18080
 PUBLIC_GATEWAY_PORT ?= 8080
 
-.PHONY: run-gateway run-auth run-data run-meta run-observ run-minikv run-skynet run-all
+.PHONY: run-gateway run-auth run-data run-meta run-observ run-minikv run-skynet run-all smoke-skynet
 run-gateway: ## Run Gin gateway alone (default :8080; behind skynet use GATEWAY_ADDR=:18080)
 	$(GO) run ./cmd/gateway
 
@@ -112,6 +112,9 @@ run-minikv: cmake-build ## Run C++ minikv_server (default :8888)
 run-skynet: cmake-build ## Run skynet front proxy (public :8080 → Gin :18080)
 	@test -x "$(SKYNET_BIN)" || $(MAKE) cmake-build
 	$(SKYNET_BIN) --config $(SKYNET_CONFIG)
+
+smoke-skynet: cmake-build ## Smoke Client→skynet(:8080)→Gin(:18080)
+	bash scripts/smoke_skynet_front.sh
 
 run-all: ## Run minikv + Go services + skynet front proxy (Ctrl+C stops all)
 	@echo "Starting minikv + Go + skynet front proxy. Public entry :$(PUBLIC_GATEWAY_PORT) → Gin $(GIN_INTERNAL_ADDR)"

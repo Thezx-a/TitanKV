@@ -19,7 +19,7 @@ bool AcceptAwaitable::await_ready() const {
 
 void AcceptAwaitable::await_suspend(std::coroutine_handle<> h) {
     handle_ = h;
-    ctx_->add(listen_fd_, EPOLLIN, [this](uint32_t) {
+    ctx_->watchOnce(listen_fd_, EPOLLIN, [this](uint32_t) {
         client_fd_ = ::accept4(listen_fd_, nullptr, nullptr, SOCK_NONBLOCK);
         handle_.resume();
     });

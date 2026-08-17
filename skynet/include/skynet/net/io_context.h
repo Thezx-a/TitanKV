@@ -15,6 +15,8 @@ public:
     IOContext();
     ~IOContext();
     void add(int fd, uint32_t events, Callback cb);
+    // One-shot watch for coroutines: fires once, then removes fd from epoll (ET-safe re-arm).
+    void watchOnce(int fd, uint32_t events, Callback cb);
     void modify(int fd, uint32_t events);
     void remove(int fd);
     bool poll(int timeout_ms);

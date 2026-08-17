@@ -13,10 +13,18 @@ IOContext::~IOContext() {
 }
 
 void IOContext::add(int fd, uint32_t events, Callback cb) {
-    struct epoll_event ev;
+    watchOnce(fd, events, std::move(cb));
+}
+
+void IOContext::watchOnce(int fd, uint32_t events, Callback cb) {
+    struct epoll_event ev{};
     ev.events = events | EPOLLET;
     ev.data.fd = fd;
-    ::epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &ev);
+    if (callbacks_.find(fd) != callbacks_.end()) {
+        ::epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &ev);
+    } else {
+        ::epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &ev);
+    }
     callbacks_[fd] = std::move(cb);
 }
 
@@ -38,7 +46,11 @@ bool IOContext::poll(int timeout_ms) {
     for (int i = 0; i < n; ++i) {
         int fd = events[i].data.fd;
         auto it = callbacks_.find(fd);
-        if (it != callbacks_.end()) it->second(events[i].events);
+        if (it == callbacks_.end()) continue;
+        Callback cb = std::move(it->second);
+        callbacks_.erase(it);
+        ::epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr);
+        cb(events[i].events);
     }
     return n > 0;
 }

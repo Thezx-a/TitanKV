@@ -52,8 +52,12 @@ graph TB
         SDK["Go SDK<br/>client-go/titan/"]
     end
 
+    subgraph FrontProxy["前置接入 / Front Proxy — C++20 skynet"]
+        SKYGW["skynet_gateway<br/>对外 :8080<br/>半包/线程池/SSE 流式"]
+    end
+
     subgraph Gateway["网关层 / Gateway Layer — Go + Gin"]
-        GW["API Gateway<br/>gateway/main.go :8080"]
+        GW["API Gateway<br/>cmd/gateway<br/>run-all 时 :18080"]
         MW["中间件链 (洋葱模型)<br/>RequestID → Logger → Recover<br/>→ RateLimit → Auth → RBAC"]
         PROXY["反向代理<br/>gateway/handler/proxy.go"]
     end
@@ -77,7 +81,7 @@ graph TB
     end
 
     subgraph NetLib["网络库 / Network Library — C++20"]
-        SKYNET["skynet 协程框架<br/>skynet/src/"]
+        SKYNET["skynet 库 + skynet_gateway<br/>库: skynet/src/<br/>前置: gateway/ (run-all)"]
         IO["epoll / io_context<br/>net/"]
         HTTP["HTTP 解析 + Router<br/>http/"]
         LB["负载均衡 + 连接池<br/>proxy/"]
@@ -96,9 +100,10 @@ graph TB
         REDIS[("Redis<br/>限流 + jti 黑名单")]
     end
 
-    WEBUI -->|HTTP + SSE| GW
-    CLI --> GW
-    SDK --> GW
+    WEBUI -->|HTTP + SSE| SKYGW
+    CLI --> SKYGW
+    SDK --> SKYGW
+    SKYGW -->|反向代理| GW
     GW --> MW --> PROXY
     PROXY --> AUTH
     PROXY --> DATA
@@ -128,6 +133,7 @@ graph TB
 | 层 / Layer | 职责 / Responsibility | 关键代码 / Key Code |
 |---|---|---|
 | 客户端 / Client | 控制台、CLI、SDK 接入 | `web/`, `client-cli/`, `client-go/titan/` |
+| 前置接入 / Front Proxy | skynet 对外 :8080 → Gin :18080（`make run-all`） | `skynet/gateway/` |
 | 网关 / Gateway | 鉴权、限流、RBAC、反向代理 | `gateway/` |
 | 微服务 / Services | Auth / Data / Meta / Observability | `services/{auth,data,meta,observability}/` |
 | 存储引擎 / Storage Engine | LSM-Tree：WAL/MemTable/SST/Compaction/MVCC | `minikv/src/core/` |
@@ -203,9 +209,9 @@ titan-kv/
 | Phase 7 | 可观测性 + Kubernetes + CI/CD / Observability + K8s + CI/CD | ⏳ planned |
 | Phase 8 | CLI 工具 + 多语言 SDK + 文档 / CLI + SDK + docs | ⏳ planned |
 
-> **MVP 说明 / MVP note**：`make run-all` 会启动 `minikv_server`，Data 服务通过 `MINIKV_ADDR` 持久化到 LSM。Observability 仍有 mock 指标。Raft 为教学用单节点，不是多机生产集群。
+> **MVP 说明 / MVP note**：`make run-all` 对外 **:8080 = skynet_gateway 前置** → Gin `:18080` → Data/Auth…；会启动 `minikv_server`，Data 经 `MINIKV_ADDR` 持久化到 LSM。skynet 不做 JWT/限流。Observability 仍有 mock 指标。Raft 为教学用单节点，不是多机生产集群。
 >
-> `make run-all` starts `minikv_server`; Data persists via `MINIKV_ADDR`. Observability metrics may still be mocked. Raft is a teaching 1-node group, not a multi-host cluster.
+> `make run-all` exposes **:8080 = skynet front proxy** → Gin `:18080` → services; starts `minikv_server`; Data persists via `MINIKV_ADDR`. skynet does not do JWT/rate-limit. Observability metrics may still be mocked. Raft is a teaching 1-node group, not a multi-host cluster.
 
 ---
 
@@ -396,12 +402,14 @@ curl -s http://localhost:8080/api/data/kv/foo \
 | `make cmake-build` | 仅构建 C++ / build C++ only |
 | `make cpp-test` | 仅运行 C++ 测试 / run C++ tests only |
 | `make go-build` / `make go-test` | 仅 Go 构建 / 测试 / Go build / test |
-| `make run-gateway` | 网关 :8080 / gateway |
+| `make run-gateway` | 单独 Gin（默认 :8080；在 skynet 后用 `GATEWAY_ADDR=:18080`） |
+| `make run-skynet` | skynet 前置 :8080 → Gin :18080 |
+| `make smoke-skynet` | 冒烟：Client→skynet→Gin `/ping` |
 | `make run-auth` | Auth 服务 :8082 / auth service |
 | `make run-data` | Data 服务 :8081 / data service |
 | `make run-meta` | Meta 服务 :8083 / meta service |
 | `make run-observ` | Observability 服务 :8084 / observability service |
-| `make run-all` | 并行启动 5 个 Go 服务 / run all 5 Go services |
+| `make run-all` | minikv + Go + skynet 前置（对外 :8080） |
 | `make web-install` / `make web-dev` / `make web-build` | Next.js 安装 / 开发 / 构建 |
 | `make docker-up` / `make docker-down` | 本地开发栈 (Postgres/Redis/etcd/Jaeger/Prometheus/Grafana) |
 | `make clean` | 清理构建产物 / clean build artifacts |

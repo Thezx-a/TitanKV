@@ -1,6 +1,10 @@
-﻿# TitanKV 方案一：skynet 前置反向代理
+﻿# TitanKV 方案一：skynet 前置反向代理（工程加深档）
 # 对外入口 :8080 → 转发到 Gin 内网口 :18080
 # Gin 仍负责 JWT / 限流 / 按路径反代到 Data 等服务
+#
+# skynet 前置反向代理 — epoll ET + C++20 协程事件环
+# 对外 :8080 → Gin 内网 :18080
+# 单线程 IOContext::poll + co_await 挂起/恢复（非线程池阻塞 IO）
 listen:
   port: 8080
   threads: 4
