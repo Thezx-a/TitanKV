@@ -20,6 +20,8 @@ public:
     virtual Status write(const WriteOptions& opts, const WriteBatch& batch) = 0;
     virtual std::unique_ptr<Iterator> newIterator(const ReadOptions& opts) = 0;
     virtual void compact() = 0;
+    // Block until all pending MemTable flushes finish (tests + graceful shutdown).
+    virtual void waitFlush() = 0;
 };
 
 }  // namespace minikv

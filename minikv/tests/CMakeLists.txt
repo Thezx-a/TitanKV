@@ -11,6 +11,7 @@ add_executable(minikv_tests
     test_manifest.cpp
     test_internal_key.cpp
     test_db_reopen.cpp
+    test_block_cache.cpp
     test_memtable_snapshot.cpp
     test_event_loop.cpp
     test_server_reactor.cpp

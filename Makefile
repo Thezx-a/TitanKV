@@ -89,7 +89,7 @@ SKYNET_CONFIG       ?= $(CURDIR)/skynet/gateway/gateway.yaml
 GIN_INTERNAL_ADDR   ?= :18080
 PUBLIC_GATEWAY_PORT ?= 8080
 
-.PHONY: run-gateway run-auth run-data run-meta run-observ run-minikv run-skynet run-all smoke-skynet
+.PHONY: run-gateway run-auth run-data run-meta run-observ run-rag run-minikv run-skynet run-all smoke-skynet
 run-gateway: ## Run Gin gateway alone (default :8080; behind skynet use GATEWAY_ADDR=:18080)
 	$(GO) run ./cmd/gateway
 
@@ -104,6 +104,9 @@ run-meta: ## Run meta service (Phase 4, port 8083)
 
 run-observ: ## Run observability service (Phase 4, port 8084)
 	$(GO) run ./cmd/observability
+
+run-rag: ## Run RAG service (port 8085)
+	MINIKV_ADDR=$(MINIKV_ADDR) $(GO) run ./services/rag/cmd
 
 run-minikv: cmake-build ## Run C++ minikv_server (default :8888)
 	@mkdir -p $(MINIKV_DB)
@@ -125,8 +128,9 @@ run-all: ## Run minikv + Go services + skynet front proxy (Ctrl+C stops all)
 	@MINIKV_ADDR=$(MINIKV_ADDR) $(GO) run ./cmd/auth & echo $$! > /tmp/titankv-auth.pid
 	@MINIKV_ADDR=$(MINIKV_ADDR) $(GO) run ./cmd/data & echo $$! > /tmp/titankv-data.pid
 	@$(GO) run ./cmd/meta & echo $$! > /tmp/titankv-meta.pid
+	@MINIKV_ADDR=$(MINIKV_ADDR) $(GO) run ./services/rag/cmd & echo $$! > /tmp/titankv-rag.pid
 	@$(GO) run ./cmd/observability & echo $$! > /tmp/titankv-observ.pid
-	@GATEWAY_ADDR=$(GIN_INTERNAL_ADDR) $(GO) run ./cmd/gateway & echo $$! > /tmp/titankv-gin.pid
+	@GATEWAY_ADDR=$(GIN_INTERNAL_ADDR) RAG_SERVICE_URL=http://127.0.0.1:8085 $(GO) run ./cmd/gateway & echo $$! > /tmp/titankv-gin.pid
 	@sleep 1
 	@$(SKYNET_BIN) --config $(SKYNET_CONFIG) & echo $$! > /tmp/titankv-skynet.pid
 	@echo "PIDs saved under /tmp/titankv-*.pid  —  curl http://127.0.0.1:$(PUBLIC_GATEWAY_PORT)/ping"

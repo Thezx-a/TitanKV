@@ -16,10 +16,16 @@ func NewService(store *Store) *Service {
 }
 
 // CollectionRequest 创建/更新 Collection 请求.
+//
+//   - Type: "kv" (默认) | "rag"
+//   - RagConfig: 仅当 Type=="rag" 时必填
+//   - TTL / Schema: 普通 KV 命名空间参数
 type CollectionRequest struct {
-	Name   string            `json:"name" binding:"required"`
-	TTL    int               `json:"ttl_seconds"`
-	Schema map[string]string `json:"schema"`
+	Name      string              `json:"name" binding:"required"`
+	Type      string              `json:"type"`
+	TTL       int                 `json:"ttl_seconds"`
+	Schema    map[string]string   `json:"schema"`
+	RagConfig *RagCollectionConfig `json:"rag_config,omitempty"`
 }
 
 // CreateCollection POST /api/meta/collections
@@ -30,12 +36,18 @@ func (s *Service) CreateCollection(c *gin.Context) {
 		return
 	}
 	col := &Collection{
-		Name:   req.Name,
-		TTL:    req.TTL,
-		Schema: req.Schema,
+		Name:      req.Name,
+		Type:      req.Type,
+		TTL:       req.TTL,
+		Schema:    req.Schema,
+		RagConfig: req.RagConfig,
 	}
 	if err := s.store.Create(col); err != nil {
-		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		status := http.StatusConflict
+		if err == ErrRAGConfigRequired || err == ErrRAGConfigNotApplicable {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusCreated, col)
@@ -66,8 +78,12 @@ func (s *Service) UpdateCollection(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := s.store.Update(name, req.TTL, req.Schema); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+	if err := s.store.Update(name, req.TTL, req.Schema, req.RagConfig); err != nil {
+		status := http.StatusNotFound
+		if err == ErrRAGConfigNotApplicable {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 	col, _ := s.store.Find(name)

@@ -93,9 +93,15 @@ void Version::removeLevelFiles(int level, const std::vector<std::string>& paths)
     if (manifest_) (void)manifest_->sync();
 }
 
-bool Version::shouldCompactL0() const {
+bool Version::shouldCompactL0(size_t trigger) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return !levels_.empty() && levels_[0].size() >= 4;
+    return !levels_.empty() && levels_[0].size() >= trigger;
+}
+
+bool Version::shouldCompactLevel(int level, size_t file_trigger) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (level < 0 || level >= static_cast<int>(levels_.size())) return false;
+    return levels_[level].size() >= file_trigger;
 }
 
 size_t Version::levelSize(int level) const {

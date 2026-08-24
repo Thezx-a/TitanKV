@@ -1,4 +1,5 @@
 ﻿#include "core/sstable_reader.h"
+#include "core/block_cache.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -15,9 +16,11 @@
 namespace minikv {
 namespace core {
 
-std::unique_ptr<SSTableReader> SSTableReader::open(const std::string& path) {
+std::unique_ptr<SSTableReader> SSTableReader::open(const std::string& path,
+                                                   BlockCache* cache) {
     auto reader = std::unique_ptr<SSTableReader>(new SSTableReader());
     reader->path_ = path;
+    reader->block_cache_ = cache;
     reader->fd_   = ::open(path.c_str(), O_RDONLY);
     if (reader->fd_ < 0) return nullptr;
 
@@ -74,6 +77,14 @@ Status SSTableReader::readBlock(const BlockHandle& h, std::string* out) const {
     if (h.size < kSSTableBlockHeader)
         return Status::Corruption("SSTable block handle size too small");
 
+    if (block_cache_) {
+        BlockCacheKey key{path_, h.offset};
+        if (auto cached = block_cache_->get(key)) {
+            *out = *cached;
+            return Status::Ok();
+        }
+    }
+
     ::lseek(fd_, static_cast<off_t>(h.offset), SEEK_SET);
     char hdr[kSSTableBlockHeader];
     if (::read(fd_, hdr, kSSTableBlockHeader) != static_cast<ssize_t>(kSSTableBlockHeader))
@@ -98,7 +109,12 @@ Status SSTableReader::readBlock(const BlockHandle& h, std::string* out) const {
     if (actual != crc)
         return Status::Corruption("SSTable block CRC mismatch");
 
-    return decompressBlock(type, Slice(payload), uncompressed_sz, *out);
+    Status ds = decompressBlock(type, Slice(payload), uncompressed_sz, *out);
+    if (ds.ok() && block_cache_) {
+        BlockCacheKey key{path_, h.offset};
+        block_cache_->put(key, *out);
+    }
+    return ds;
 }
 
 std::optional<std::string> SSTableReader::get(const Slice& userKey) const {

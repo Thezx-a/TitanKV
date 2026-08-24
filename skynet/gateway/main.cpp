@@ -1,4 +1,12 @@
-﻿// skynet_gateway — epoll ET + C++20 coroutines front proxy (Client → Gin)
+// skynet_gateway — main/sub Reactor + epoll ET + C++20 coroutines (Client → Gin)
+//
+// 架构：
+//   main reactor (主线程)：1 个 IOContext，只跑 acceptLoop 协程 accept
+//   sub  reactor (N 工作线程)：每个一个 IOContext + 自己的 epoll_fd
+//     - 主线程 accept 出 client_fd 后 round-robin 投递到某个 sub 的 pending 队列
+//     - sub worker drain 队列后 spawn handleClient 协程，在自己线程上 co_await IO
+//     - 协程挂起让出 CPU（非阻塞），sub 线程继续 poll 处理其他 fd
+//   accept 与 IO 分离，能利用多核；LoadBalancer 跨 sub 共享。
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -6,8 +14,10 @@
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "skynet/config/config.h"
 #include "skynet/core/detached_task.h"
@@ -28,9 +38,17 @@ std::atomic<bool> g_running{true};
 std::atomic<int> g_inflight{0};
 std::atomic<int> g_accepted{0};
 
-skynet::net::IOContext* g_ctx = nullptr;
-
 void signalHandler(int) { g_running = false; }
+
+// SubReactor：每个工作线程一个独立 IOContext + 自己的 epoll_fd，
+// 主线程通过 pending 队列把已 accept 的 client 投递过来。
+struct SubReactor {
+    skynet::net::IOContext ctx;
+    std::mutex mq;
+    std::vector<std::unique_ptr<skynet::net::Socket>> pending;
+    std::atomic<bool> running{true};
+    std::thread worker;
+};
 
 std::string toLowerCopy(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(),
@@ -55,16 +73,19 @@ bool headerHas(const std::string& headers_lower, const char* needle) {
     return headers_lower.find(needle) != std::string::npos;
 }
 
-skynet::core::Task<bool> sendSimple(skynet::net::Socket& sock, const char* resp) {
-    co_return co_await skynet::net::asyncWriteAll(sock, g_ctx, resp, std::strlen(resp));
+// 所有原 g_ctx 引用改为显式传入的 IOContext*（即 SubReactor::ctx）。
+skynet::core::Task<bool> sendSimple(skynet::net::Socket& sock, const char* resp,
+                                    skynet::net::IOContext* ctx) {
+    co_return co_await skynet::net::asyncWriteAll(sock, ctx, resp, std::strlen(resp));
 }
 
-skynet::core::Task<bool> readFullHttpRequest(skynet::net::Socket& sock, std::string* out) {
+skynet::core::Task<bool> readFullHttpRequest(skynet::net::Socket& sock, std::string* out,
+                                              skynet::net::IOContext* ctx) {
     skynet::http::HttpParser parser;
     char buf[8192];
     while (true) {
         if (out->size() >= kMaxRequestBytes) co_return false;
-        ssize_t n = co_await skynet::net::asyncRead(sock, g_ctx, buf, sizeof(buf));
+        ssize_t n = co_await skynet::net::asyncRead(sock, ctx, buf, sizeof(buf));
         if (n <= 0) co_return false;
         out->append(buf, static_cast<size_t>(n));
         auto result = parser.feed(buf, static_cast<size_t>(n));
@@ -73,7 +94,8 @@ skynet::core::Task<bool> readFullHttpRequest(skynet::net::Socket& sock, std::str
     }
 }
 
-skynet::core::Task<bool> relayResponse(skynet::net::Socket& backend, skynet::net::Socket& client) {
+skynet::core::Task<bool> relayResponse(skynet::net::Socket& backend, skynet::net::Socket& client,
+                                       skynet::net::IOContext* ctx) {
     std::string buf;
     char tmp[8192];
     bool headers_done = false;
@@ -85,7 +107,7 @@ skynet::core::Task<bool> relayResponse(skynet::net::Socket& backend, skynet::net
 
     auto flush_new = [&](size_t from) -> skynet::core::Task<bool> {
         if (buf.size() <= from) co_return true;
-        co_return co_await skynet::net::asyncWriteAll(client, g_ctx, buf.data() + from,
+        co_return co_await skynet::net::asyncWriteAll(client, ctx, buf.data() + from,
                                                       buf.size() - from);
     };
 
@@ -94,7 +116,7 @@ skynet::core::Task<bool> relayResponse(skynet::net::Socket& backend, skynet::net
             co_return co_await flush_new(already_sent);
         }
 
-        ssize_t n = co_await skynet::net::asyncRead(backend, g_ctx, tmp, sizeof(tmp));
+        ssize_t n = co_await skynet::net::asyncRead(backend, ctx, tmp, sizeof(tmp));
         if (n <= 0) {
             if (headers_done && content_length >= 0 &&
                 buf.size() >= body_start + static_cast<size_t>(content_length)) {
@@ -151,20 +173,24 @@ skynet::core::Task<bool> relayResponse(skynet::net::Socket& backend, skynet::net
     }
 }
 
+// 在 sub reactor 上跑：ctx 用 sr->ctx（sub 自己的 epoll_fd），
+// 跨 sub 共享同一个 LoadBalancer（select 内部用 atomic 计数，并发可接受）。
 skynet::core::DetachedTask handleClient(std::unique_ptr<skynet::net::Socket> client_sock,
-                                        skynet::proxy::LoadBalancer* lb) {
+                                        skynet::proxy::LoadBalancer* lb,
+                                        SubReactor* sr) {
     struct InflightGuard {
         ~InflightGuard() { g_inflight.fetch_sub(1); }
     } guard;
     g_inflight.fetch_add(1);
 
+    auto* ctx = &sr->ctx;
     auto& client = *client_sock;
 
     std::string rawReq;
-    if (!co_await readFullHttpRequest(client, &rawReq)) {
+    if (!co_await readFullHttpRequest(client, &rawReq, ctx)) {
         co_await sendSimple(client,
                             "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: "
-                            "close\r\n\r\n");
+                            "close\r\n\r\n", ctx);
         client.close();
         co_return;
     }
@@ -173,18 +199,17 @@ skynet::core::DetachedTask handleClient(std::unique_ptr<skynet::net::Socket> cli
     if (!upstream) {
         co_await sendSimple(client,
                             "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: "
-                            "close\r\n\r\n");
+                            "close\r\n\r\n", ctx);
         client.close();
         co_return;
     }
 
     upstream->active_connections++;
-    auto backendSock =
-        co_await skynet::net::asyncConnect(g_ctx, upstream->host, upstream->port);
+    auto backendSock = co_await skynet::net::asyncConnect(ctx, upstream->host, upstream->port);
     if (!backendSock) {
         co_await sendSimple(client,
                             "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: "
-                            "close\r\n\r\n");
+                            "close\r\n\r\n", ctx);
         upstream->active_connections--;
         client.close();
         co_return;
@@ -199,39 +224,59 @@ skynet::core::DetachedTask handleClient(std::unique_ptr<skynet::net::Socket> cli
         }
     }
 
-    if (!co_await skynet::net::asyncWriteAll(*backendSock, g_ctx, fwd.data(), fwd.size())) {
+    if (!co_await skynet::net::asyncWriteAll(*backendSock, ctx, fwd.data(), fwd.size())) {
         co_await sendSimple(client,
                             "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: "
-                            "close\r\n\r\n");
+                            "close\r\n\r\n", ctx);
         backendSock->close();
         upstream->active_connections--;
         client.close();
         co_return;
     }
 
-    co_await relayResponse(*backendSock, client);
+    co_await relayResponse(*backendSock, client, ctx);
 
     backendSock->close();
     upstream->active_connections--;
     client.close();
 }
 
-skynet::core::DetachedTask acceptLoop(skynet::net::Acceptor* acceptor,
-                                      skynet::proxy::LoadBalancer* lb, int max_connections) {
-    while (g_running.load()) {
-        auto client = co_await acceptor->accept(g_ctx);
-        if (!client) continue;
-
-        if (g_inflight.load() >= max_connections) {
-            co_await sendSimple(*client,
-                                "HTTP/1.1 503 Service Unavailable\r\nContent-Length: "
-                                "0\r\nConnection: close\r\n\r\n");
-            client->close();
-            continue;
+// sub reactor worker 线程入口：drain pending → spawn handleClient → poll 事件循环
+void subReactorLoop(SubReactor* sr, skynet::proxy::LoadBalancer* lb, int max_connections) {
+    while (sr->running.load() || g_inflight.load() > 0) {
+        // 同线程 drain pending（同线程 epoll_ctl_add 安全，避免跨线程竞态）
+        std::vector<std::unique_ptr<skynet::net::Socket>> incoming;
+        {
+            std::lock_guard<std::mutex> lk(sr->mq);
+            incoming.swap(sr->pending);
         }
+        for (auto& sock : incoming) {
+            if (g_inflight.load() >= max_connections) {
+                // 超限直接关闭（sock 析构会 close fd）
+                sock->close();
+                continue;
+            }
+            g_accepted.fetch_add(1);
+            handleClient(std::move(sock), lb, sr);
+        }
+        sr->ctx.poll(50);
+    }
+}
 
-        g_accepted.fetch_add(1);
-        handleClient(std::move(client), lb);
+// main reactor 上跑：只 accept，fd round-robin 投递到 sub
+skynet::core::DetachedTask acceptLoop(skynet::net::Acceptor* acceptor,
+                                      skynet::net::IOContext* main_ctx,
+                                      std::vector<SubReactor>* subs) {
+    size_t idx = 0;
+    while (g_running.load()) {
+        auto client = co_await acceptor->accept(main_ctx);
+        if (!client) continue;
+        auto& sr = (*subs)[idx % subs->size()];
+        idx++;
+        {
+            std::lock_guard<std::mutex> lk(sr.mq);
+            sr.pending.push_back(std::move(client));
+        }
     }
 }
 
@@ -267,27 +312,43 @@ int main(int argc, char* argv[]) {
                                    cfg->health_check.timeout_ms);
     hc.start();
 
-    skynet::net::IOContext ctx;
-    g_ctx = &ctx;
+    // 启动 N 个 sub reactor 工作线程（gateway.yaml listen.threads）
+    int n_threads = cfg->worker_threads > 0 ? cfg->worker_threads : 1;
+    std::vector<SubReactor> subs(static_cast<size_t>(n_threads));
+    for (auto& sr : subs) {
+        sr.worker = std::thread(subReactorLoop, &sr, &lb, cfg->limits.max_connections);
+    }
 
+    // main reactor：仅 accept，把 fd 投递给 sub
+    skynet::net::IOContext main_ctx;
     skynet::net::Acceptor acceptor("0.0.0.0", cfg->listen_port);
-    if (!acceptor.bindAndListen()) return 1;
+    if (!acceptor.bindAndListen()) {
+        for (auto& sr : subs) { sr.running = false; sr.worker.join(); }
+        return 1;
+    }
 
-    std::cout << "SkyNet gateway (epoll ET + coroutines) on :" << cfg->listen_port
+    std::cout << "SkyNet gateway (main/sub Reactor, " << n_threads
+              << " sub reactor(s), epoll ET + coroutines) on :" << cfg->listen_port
               << " → Gin upstream(s)" << std::endl;
 
-    acceptLoop(&acceptor, &lb, cfg->limits.max_connections);
+    acceptLoop(&acceptor, &main_ctx, &subs);
 
     while (g_running.load()) {
-        ctx.poll(100);
+        main_ctx.poll(100);
     }
 
     std::cout << "Shutting down, drain inflight (max " << kShutdownDrainMs << "ms)..." << std::endl;
+    // 1) 通知 sub reactor 退出循环（但等 inflight 归零）
+    for (auto& sr : subs) sr.running = false;
+
     auto deadline = std::chrono::steady_clock::now() +
                     std::chrono::milliseconds(kShutdownDrainMs);
     while (g_inflight.load() > 0 && std::chrono::steady_clock::now() < deadline) {
-        ctx.poll(50);
+        // sub reactor 仍 poll 一段时间让挂起协程完成
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    for (auto& sr : subs) {
+        if (sr.worker.joinable()) sr.worker.join();
     }
 
     hc.stop();

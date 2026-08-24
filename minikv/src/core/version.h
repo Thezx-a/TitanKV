@@ -35,7 +35,8 @@ public:
     std::vector<SSTableMeta> getLevelMetas(int level) const;
     void addLevelFile(int level, const std::string& path);
     void removeLevelFiles(int level, const std::vector<std::string>& paths);
-    bool shouldCompactL0() const;
+    bool shouldCompactL0(size_t trigger = 4) const;
+    bool shouldCompactLevel(int level, size_t file_trigger = 2) const;
     size_t levelSize(int level) const;
     uint64_t nextFileNumber();
     // Ensure the next allocated number is >= min_next (does not return a number).

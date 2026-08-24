@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
+	"github.com/titan-kv/titan/pkg/metrics"
 	"github.com/titan-kv/titan/services/meta"
 )
 
@@ -43,7 +44,8 @@ func main() {
 	}
 
 	r := gin.New()
-	r.Use(gin.Recovery())
+	r.Use(gin.Recovery(), metrics.GinMiddleware("meta"))
+	metrics.RegisterRoutes(r)
 	svc.RegisterRoutes(r)
 
 	srv := &http.Server{Addr: addr, Handler: r}

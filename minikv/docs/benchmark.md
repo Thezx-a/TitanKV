@@ -23,8 +23,13 @@
 | PUT  | **10961** | 91.2 µs |
 | GET  | **3352** | 298.4 µs |
 
-说明：上表是 **2026-08-07 单线程 Reactor** 时的单连接同步请求。此后 `minikv_server` 已改为 main + sub Reactor（默认 `--io-threads 4`），上表数字未重跑，勿当作当前多连接吞吐。Get 仍受 MemTable/SST 查找影响。
-数字仅供简历「自测」引用，勿与 RocksDB 官方多线程压测横比。
+说明：上表是 **2026-08-07 单线程 Reactor** 时的单连接同步请求。此后 `minikv_server` 已改为 main + sub Reactor（默认 `--io-threads 4`），并接入 Block Cache + L1+ Compaction + waitFlush。重跑：
+
+```bash
+make cmake-build
+./build/minikv/minikv_server --port 8888 --db /tmp/mk --io-threads 4 &
+./scripts/bench_minikv.sh 127.0.0.1:8888 5000
+```
 
 ## SkipList / WAL 分项
 

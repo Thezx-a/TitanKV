@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/titan-kv/titan/pkg/metrics"
 	"github.com/titan-kv/titan/services/auth"
 )
 
@@ -36,7 +37,8 @@ func main() {
 	svc := auth.NewService(jwtSecret, rdb)
 
 	r := gin.New()
-	r.Use(gin.Recovery())
+	r.Use(gin.Recovery(), metrics.GinMiddleware("auth"))
+	metrics.RegisterRoutes(r)
 	svc.RegisterRoutes(r)
 
 	// Internal API Key issue route (gateway injects auth in production).

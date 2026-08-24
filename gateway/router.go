@@ -18,6 +18,7 @@
 //   /api/data/*  → 反向代理到 data-service (Phase 4)
 //   /api/meta/*  → 反向代理到 meta-service (Phase 4)
 //   /api/observability/* → 反向代理到 observability-service (Phase 4)
+//   /api/rag/*   → 反向代理到 rag-service (Phase 5, RBAC: rag:ingest / rag:query)
 package gateway
 
 import (
@@ -26,6 +27,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,29 +36,32 @@ import (
 
 	"github.com/titan-kv/titan/gateway/handler"
 	"github.com/titan-kv/titan/gateway/middleware"
+	"github.com/titan-kv/titan/pkg/metrics"
 	"github.com/titan-kv/titan/services/auth"
 )
 
 // Config Gateway 配置, 从环境变量读取.
 type Config struct {
-	Addr           string
-	JWTSecret      string
-	RedisAddr      string
-	AuthServiceURL string
-	DataServiceURL string
-	MetaServiceURL string
-	ObservURL      string
+	Addr            string
+	JWTSecret       string
+	RedisAddr       string
+	AuthServiceURL  string
+	DataServiceURL  string
+	MetaServiceURL  string
+	ObservURL       string
+	RAGServiceURL   string
 }
 
 func loadConfig() Config {
 	return Config{
-		Addr:           getenv("GATEWAY_ADDR", ":8080"),
-		JWTSecret:      getenv("JWT_SECRET", "dev-secret-change-in-production"),
-		RedisAddr:      getenv("REDIS_ADDR", "localhost:6379"),
-		AuthServiceURL: getenv("AUTH_SERVICE_URL", "http://localhost:8082"),
-		DataServiceURL: getenv("DATA_SERVICE_URL", "http://localhost:8081"),
-		MetaServiceURL: getenv("META_SERVICE_URL", "http://localhost:8083"),
-		ObservURL:      getenv("OBSERV_SERVICE_URL", "http://localhost:8084"),
+		Addr:            getenv("GATEWAY_ADDR", ":8080"),
+		JWTSecret:       getenv("JWT_SECRET", "dev-secret-change-in-production"),
+		RedisAddr:       getenv("REDIS_ADDR", "localhost:6379"),
+		AuthServiceURL:  getenv("AUTH_SERVICE_URL", "http://localhost:8082"),
+		DataServiceURL:  getenv("DATA_SERVICE_URL", "http://localhost:8081"),
+		MetaServiceURL:  getenv("META_SERVICE_URL", "http://localhost:8083"),
+		ObservURL:       getenv("OBSERV_SERVICE_URL", "http://localhost:8084"),
+		RAGServiceURL:   getenv("RAG_SERVICE_URL", "http://localhost:8085"),
 	}
 }
 
@@ -92,6 +97,8 @@ func Run() {
 
 	r := gin.New()
 	r.Use(gin.Recovery()) // gin 内置兜底, 我们自己的 Recover 在外层
+	r.Use(metrics.GinMiddleware("gateway"))
+	metrics.RegisterRoutes(r)
 	r.Use(
 		middleware.RequestID(),
 		middleware.Logger(),
@@ -104,6 +111,7 @@ func Run() {
 	// 健康检查 (无鉴权)
 	r.GET("/ping", handler.Ping)
 	r.GET("/healthz", handler.Healthz("0.1.0"))
+	RegisterClusterRoutes(r)
 
 	// Auth 路由 (无鉴权)
 	r.POST("/api/auth/register", authClient.RegisterHandler)
@@ -123,6 +131,7 @@ func Run() {
 		"/api/data":          cfg.DataServiceURL,
 		"/api/meta":          cfg.MetaServiceURL,
 		"/api/observability": cfg.ObservURL,
+		"/api/rag":           cfg.RAGServiceURL,
 	})
 	if err != nil {
 		log.Fatalf("new reverse proxy: %v", err)
@@ -133,7 +142,9 @@ func Run() {
 		Redis:        rdb,
 		APIKeyVerify: apiKeyVerify,
 	})
-	rbacMW := func(c *gin.Context) {
+
+	// /api/data, /api/meta, /api/observability: 按 HTTP 方法映射 KV/Collection 权限.
+	kvRBAC := func(c *gin.Context) {
 		switch c.Request.Method {
 		case http.MethodGet:
 			middleware.RBAC(middleware.PermKVGet)(c)
@@ -149,10 +160,39 @@ func Run() {
 	}
 
 	for _, prefix := range []string{"/api/data", "/api/meta", "/api/observability"} {
-		g := r.Group(prefix, authMW, rbacMW)
+		g := r.Group(prefix, authMW, kvRBAC)
 		g.Any("/*proxyPath", rp.Handle)
 		g.Any("", rp.Handle)
 	}
+
+	// /api/rag: 区分 rag:ingest (写) / rag:query (读 + 检索 + 问答).
+	// retrieve 与 chat 虽是 POST 但属 query 权限.
+	ragRBAC := func(c *gin.Context) {
+		path := c.Request.URL.Path
+		switch {
+		case strings.HasSuffix(path, "/retrieve") || strings.HasSuffix(path, "/chat"):
+			middleware.RBAC(middleware.PermRAGQuery)(c)
+		case c.Request.Method == http.MethodGet ||
+			c.Request.Method == http.MethodHead ||
+			c.Request.Method == http.MethodOptions:
+			middleware.RBAC(middleware.PermRAGQuery)(c)
+		case c.Request.Method == http.MethodPost ||
+			c.Request.Method == http.MethodPut ||
+			c.Request.Method == http.MethodPatch ||
+			c.Request.Method == http.MethodDelete:
+			middleware.RBAC(middleware.PermRAGIngest)(c)
+		default:
+			middleware.RBAC(middleware.PermRAGQuery)(c)
+		}
+		if c.IsAborted() {
+			return
+		}
+		c.Next()
+	}
+
+	ragGrp := r.Group("/api/rag", authMW, ragRBAC)
+	ragGrp.Any("/*proxyPath", rp.Handle)
+	ragGrp.Any("", rp.Handle)
 
 	srv := &http.Server{
 		Addr:    cfg.Addr,

@@ -18,6 +18,8 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "概览", badge: "OV" },
   { href: "/dashboard/data", label: "数据浏览", badge: "KV" },
   { href: "/dashboard/collections", label: "Collection 管理", badge: "CO" },
+  { href: "/dashboard/rag", label: "知识库", badge: "RG" },
+  { href: "/dashboard/cluster", label: "集群", badge: "CL" },
   { href: "/dashboard/users", label: "用户管理", badge: "US" },
 ];
 

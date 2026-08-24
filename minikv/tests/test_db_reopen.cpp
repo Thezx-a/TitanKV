@@ -124,6 +124,7 @@ TEST(DBReopenTest, FlushRotatesToNewWalFile) {
             ASSERT_TRUE(db->put(wo, "k" + std::to_string(i),
                                 "value-payload-" + std::to_string(i) + "-xxxxxxxx").ok());
         }
+        db->waitFlush();
 
         auto after = listWals();
         ASSERT_FALSE(after.empty());

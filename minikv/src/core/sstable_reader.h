@@ -12,9 +12,12 @@
 namespace minikv {
 namespace core {
 
+class BlockCache;
+
 class SSTableReader {
 public:
-    static std::unique_ptr<SSTableReader> open(const std::string& path);
+    static std::unique_ptr<SSTableReader> open(const std::string& path,
+                                               BlockCache* cache = nullptr);
     std::optional<std::string> get(const Slice& userKey) const;
     bool mightContain(const Slice& key) const { return bloom_ && bloom_->mightContain(key); }
     Status scan(const Slice& start, const Slice& end,
@@ -41,6 +44,7 @@ private:
     std::string                       index_data_;
     std::vector<IndexEntry>           index_entries_;
     std::unique_ptr<BloomFilter>      bloom_;
+    BlockCache*                       block_cache_ = nullptr;
 };
 
 }  // namespace core

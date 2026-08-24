@@ -17,6 +17,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/titan-kv/titan/pkg/metrics"
 	"github.com/titan-kv/titan/services/data"
 )
 
@@ -33,7 +34,8 @@ func main() {
 	svc := data.NewService(store)
 
 	r := gin.New()
-	r.Use(gin.Recovery())
+	r.Use(gin.Recovery(), metrics.GinMiddleware("data"))
+	metrics.RegisterRoutes(r)
 	svc.RegisterRoutes(r)
 
 	srv := &http.Server{Addr: addr, Handler: r}

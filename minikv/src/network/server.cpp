@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 #include "core/internal_key.h"
+#include "minikv/write_batch.h"
 #include "network/connection.h"
 #include "network/protocol.h"
 #include "utils/coding.h"
@@ -215,6 +216,86 @@ std::string Server::processRequest(const std::string& rawData) {
             }
             std::string payload = encodeScanPayload(items);
             return encodeResponse(ResponseStatus::kOk, payload);
+        }
+        case Cmd::kBatch: {
+            // val payload: count:u32 | repeated (op:u8, key_len:u32, key, val_len:u32, val)
+            if (valLen < 4) {
+                return encodeResponse(ResponseStatus::kError, Slice("bad batch", 9));
+            }
+            const char* p = val;
+            const char* limit = val + valLen;
+            uint32_t count = utils::decodeFixed32(p);
+            p += 4;
+            WriteBatch batch;
+            for (uint32_t i = 0; i < count; ++i) {
+                if (p + 1 + 4 > limit) {
+                    return encodeResponse(ResponseStatus::kError, Slice("truncated batch", 15));
+                }
+                uint8_t op = static_cast<uint8_t>(*p++);
+                uint32_t klen = utils::decodeFixed32(p);
+                p += 4;
+                if (p + klen + 4 > limit) {
+                    return encodeResponse(ResponseStatus::kError, Slice("truncated key", 13));
+                }
+                std::string k(p, klen);
+                p += klen;
+                uint32_t vlen = utils::decodeFixed32(p);
+                p += 4;
+                if (p + vlen > limit) {
+                    return encodeResponse(ResponseStatus::kError, Slice("truncated val", 13));
+                }
+                std::string v(p, vlen);
+                p += vlen;
+                if (op == static_cast<uint8_t>(BatchOpType::kPut)) {
+                    batch.put(Slice(k), Slice(v));
+                } else if (op == static_cast<uint8_t>(BatchOpType::kDelete)) {
+                    batch.del(Slice(k));
+                } else {
+                    return encodeResponse(ResponseStatus::kError, Slice("bad batch op", 12));
+                }
+            }
+            Status s = db_->write(wopts, batch);
+            if (!s.ok()) {
+                return encodeResponse(ResponseStatus::kError, Slice(s.message()));
+            }
+            return encodeResponse(ResponseStatus::kOk, Slice());
+        }
+        case Cmd::kDeleteRange: {
+            std::string start(key, hdr->key_len);
+            std::string end(val, valLen);
+            auto it = db_->newIterator(ropts);
+            it->seekToFirst();
+            WriteBatch batch;
+            std::string last_user;
+            while (it->valid()) {
+                Slice ik = it->key();
+                if (ik.size() < core::kTrailerBytes) {
+                    it->next();
+                    continue;
+                }
+                Slice uk = core::InternalKeyUserKey(ik);
+                std::string uks = uk.toString();
+                if (!start.empty() && uks < start) {
+                    it->next();
+                    continue;
+                }
+                if (!end.empty() && uks >= end) break;
+                if (uks == last_user) {
+                    it->next();
+                    continue;
+                }
+                last_user = uks;
+                batch.del(Slice(uks));
+                it->next();
+            }
+            if (batch.count() == 0) {
+                return encodeResponse(ResponseStatus::kOk, Slice());
+            }
+            Status s = db_->write(wopts, batch);
+            if (!s.ok()) {
+                return encodeResponse(ResponseStatus::kError, Slice(s.message()));
+            }
+            return encodeResponse(ResponseStatus::kOk, Slice());
         }
         default:
             return encodeResponse(ResponseStatus::kError, Slice("Unknown command", 15));

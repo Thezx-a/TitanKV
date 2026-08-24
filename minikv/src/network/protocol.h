@@ -9,7 +9,7 @@ namespace network {
 static const uint16_t kProtocolMagic = 0x4D4B;  // "MK"
 
 enum class Cmd : uint8_t {
-    kPut = 1, kGet = 2, kDel = 3, kScan = 4, kBatch = 5,
+    kPut = 1, kGet = 2, kDel = 3, kScan = 4, kBatch = 5, kDeleteRange = 6,
 };
 
 enum class ResponseStatus : uint8_t {

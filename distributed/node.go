@@ -171,6 +171,28 @@ func (n *Node) apply(cmd *command) error {
 // Raft exposes the underlying raft.Raft for advanced callers/tests.
 func (n *Node) Raft() *raft.Raft { return n.raft }
 
+// Members returns current Raft configuration (for HTTP /cluster API).
+func (n *Node) Members() ([]map[string]string, error) {
+	f := n.raft.GetConfiguration()
+	if err := f.Error(); err != nil {
+		return nil, err
+	}
+	cfg := f.Configuration()
+	out := make([]map[string]string, 0, len(cfg.Servers))
+	for _, s := range cfg.Servers {
+		role := "voter"
+		if s.Suffrage == raft.Nonvoter {
+			role = "nonvoter"
+		}
+		out = append(out, map[string]string{
+			"id":      string(s.ID),
+			"address": string(s.Address),
+			"role":    role,
+		})
+	}
+	return out, nil
+}
+
 // FSM exposes the KV FSM.
 func (n *Node) FSM() *KVFSM { return n.fsm }
 

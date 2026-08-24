@@ -16,6 +16,8 @@ const (
 	cmdGet      uint8  = 2
 	cmdDel      uint8  = 3
 	cmdScan     uint8  = 4
+	cmdBatch    uint8  = 5
+	cmdDeleteRange uint8 = 6
 	statusOK    uint8  = 0
 	statusMiss  uint8  = 1
 	statusError uint8  = 2
@@ -172,6 +174,63 @@ func (c *MiniKVClient) Scan(start, end string) ([]KVPair, error) {
 		return nil, fmt.Errorf("minikv scan: status=%d %s", st, string(payload))
 	}
 	return decodeScanPayload(payload)
+}
+
+// BatchOp is one operation in a minikv WriteBatch over TCP.
+type BatchOp struct {
+	Put    bool
+	Key    string
+	Value  string
+}
+
+// WriteBatch sends multiple Put/Del ops in one round-trip (cmdBatch=5).
+func (c *MiniKVClient) WriteBatch(ops []BatchOp) error {
+	payload := encodeBatchPayload(ops)
+	st, msg, err := c.roundTrip(cmdBatch, nil, payload)
+	if err != nil {
+		return err
+	}
+	if st != statusOK {
+		return fmt.Errorf("minikv batch: status=%d %s", st, string(msg))
+	}
+	return nil
+}
+
+// DeleteRange removes all keys in [start, end) via server-side scan+batch.
+func (c *MiniKVClient) DeleteRange(start, end string) error {
+	st, msg, err := c.roundTrip(cmdDeleteRange, []byte(start), []byte(end))
+	if err != nil {
+		return err
+	}
+	if st != statusOK {
+		return fmt.Errorf("minikv deleteRange: status=%d %s", st, string(msg))
+	}
+	return nil
+}
+
+func encodeBatchPayload(ops []BatchOp) []byte {
+	size := 4
+	for _, op := range ops {
+		size += 1 + 4 + len(op.Key) + 4 + len(op.Value)
+	}
+	buf := make([]byte, size)
+	binary.LittleEndian.PutUint32(buf[0:4], uint32(len(ops)))
+	off := 4
+	for _, op := range ops {
+		if op.Put {
+			buf[off] = 1
+		} else {
+			buf[off] = 2
+		}
+		off++
+		binary.LittleEndian.PutUint32(buf[off:off+4], uint32(len(op.Key)))
+		off += 4
+		off += copy(buf[off:], op.Key)
+		binary.LittleEndian.PutUint32(buf[off:off+4], uint32(len(op.Value)))
+		off += 4
+		off += copy(buf[off:], op.Value)
+	}
+	return buf
 }
 
 func decodeScanPayload(payload []byte) ([]KVPair, error) {

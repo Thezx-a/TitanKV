@@ -1,12 +1,4 @@
-// Package observability 是 TitanKV 的可观测性服务 (Phase 4).
-//
-// 职责:
-//   - Metrics 聚合 (从各服务 Prometheus exporter 拉取, 二次聚合)
-//   - Health Rollup (汇总各服务健康状态)
-//   - SSE 实时推送 (给控制台仪表盘用)
-//
-// 启动: go run ./cmd/observability
-// 端口: 8084 (默认)
+// Package observability aggregates metrics and health from sibling TitanKV services.
 package observability
 
 import (
@@ -14,65 +6,66 @@ import (
 	"time"
 )
 
-// Service 是 Observability 服务.
+// Service is the Observability service.
 type Service struct {
 	mu          sync.RWMutex
 	current     Metrics
+	lastDeps    map[string]string
 	subscribers map[chan Metrics]struct{}
+	urls        ServiceURLs
 }
 
-// Metrics 推送给控制台的聚合指标.
+// Metrics pushed to the admin console.
 type Metrics struct {
-	QPS         float64 `json:"qps"`         // 每秒查询数
-	P50LatencyMs float64 `json:"p50_ms"`     // P50 延迟
-	P99LatencyMs float64 `json:"p99_ms"`     // P99 延迟
-	StorageGB   float64 `json:"storage_gb"`  // 存储用量
-	NodeCount   int     `json:"node_count"`  // 集群节点数
-	LeaderCount int     `json:"leader_count"`// Raft Leader 数
-	Timestamp   int64   `json:"timestamp"`   // Unix 秒
+	QPS          float64 `json:"qps"`
+	P50LatencyMs float64 `json:"p50_ms"`
+	P99LatencyMs float64 `json:"p99_ms"`
+	StorageGB    float64 `json:"storage_gb"`
+	NodeCount    int     `json:"node_count"`
+	LeaderCount  int     `json:"leader_count"`
+	Timestamp    int64   `json:"timestamp"`
 }
 
-// NewService 创建服务. 启动后台 ticker 每 1s 生成假数据 (生产环境从 Prometheus 拉).
+// NewService scrapes real Prometheus /metrics from sibling services.
 func NewService() *Service {
+	urls := LoadServiceURLs()
 	s := &Service{
 		subscribers: make(map[chan Metrics]struct{}),
-		current: Metrics{
-			QPS: 0, P50LatencyMs: 0, P99LatencyMs: 0,
-			StorageGB: 0, NodeCount: 1, LeaderCount: 1,
-			Timestamp: time.Now().Unix(),
-		},
+		urls:        urls,
 	}
+	m, deps := buildSnapshot(urls)
+	s.current = m
+	s.lastDeps = deps
 	go s.collectLoop()
 	return s
 }
 
-// collectLoop 模拟每秒采集指标 (生产环境从 Prometheus 拉).
 func (s *Service) collectLoop() {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
+	var prevQPS float64
 	for range ticker.C {
+		m, deps := buildSnapshot(s.urls)
 		s.mu.Lock()
-		// 模拟数据波动
-		s.current.QPS = 1000 + float64(time.Now().Unix()%500)
-		s.current.P50LatencyMs = 4 + float64(time.Now().Unix()%3)
-		s.current.P99LatencyMs = 35 + float64(time.Now().Unix()%20)
-		s.current.StorageGB = 12.3 + float64(time.Now().Unix()%100)/100
-		s.current.Timestamp = time.Now().Unix()
-		m := s.current
+		if prevQPS > 0 && m.QPS > prevQPS {
+			m.QPS = m.QPS - prevQPS
+		}
+		prevQPS = m.QPS
+		if m.QPS < 0 {
+			m.QPS = 0
+		}
+		s.current = m
+		s.lastDeps = deps
 		s.mu.Unlock()
-
-		// 推送给所有 SSE 订阅者
 		for ch := range s.subscribers {
 			select {
 			case ch <- m:
 			default:
-				// 订阅者消费慢, 丢弃本条 (避免阻塞 collect)
 			}
 		}
 	}
 }
 
-// Subscribe 订阅 metrics 流. 返回 channel, 调用方读完应 Unsubscribe.
 func (s *Service) Subscribe() chan Metrics {
 	ch := make(chan Metrics, 16)
 	s.mu.Lock()
@@ -81,7 +74,6 @@ func (s *Service) Subscribe() chan Metrics {
 	return ch
 }
 
-// Unsubscribe 取消订阅.
 func (s *Service) Unsubscribe(ch chan Metrics) {
 	s.mu.Lock()
 	delete(s.subscribers, ch)
@@ -89,33 +81,31 @@ func (s *Service) Unsubscribe(ch chan Metrics) {
 	close(ch)
 }
 
-// Current 返回当前指标快照.
 func (s *Service) Current() Metrics {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.current
 }
 
-// HealthStatus 健康状态.
 type HealthStatus struct {
-	Status    string            `json:"status"`     // ok / degraded / down
-	Version   string            `json:"version"`
-	Uptime    int64             `json:"uptime_seconds"`
-	Deps      map[string]string `json:"deps"`       // 每个依赖的状态
+	Status  string            `json:"status"`
+	Version string            `json:"version"`
+	Uptime  int64             `json:"uptime_seconds"`
+	Deps    map[string]string `json:"deps"`
 }
 
-// Health 返回健康状态.
 func (s *Service) Health() HealthStatus {
+	s.mu.RLock()
+	deps := s.lastDeps
+	s.mu.RUnlock()
+	if deps == nil {
+		_, deps = buildSnapshot(s.urls)
+	}
 	return HealthStatus{
-		Status:  "ok",
-		Version: "0.1.0",
+		Status:  rollupStatus(deps),
+		Version: "0.2.0",
 		Uptime:  int64(time.Since(startTime).Seconds()),
-		Deps: map[string]string{
-			"data-service":   "ok",
-			"meta-service":   "ok",
-			"auth-service":   "ok",
-			"storage-engine": "ok",
-		},
+		Deps:    formatDeps(deps),
 	}
 }
 
