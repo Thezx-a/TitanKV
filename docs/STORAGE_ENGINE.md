@@ -1,12 +1,14 @@
 # TitanKV Storage Engine — Design Notes
 
 This document describes the C++ storage engine that powers TitanKV, including
-the LSM-Tree layout, on-disk file formats, and durability model.
+the LSM-Tree layout, on-disk file formats, concurrency model, and durability.
 
-> **Status:** As of Phase 1 the engine has been upgraded with block
-> compression (WP 1.2.1), Manifest persistence (WP 1.2.4), and the
-> InternalKey codec foundation (WP 1.2.2 phase A). MVCC reads, range
-> deletes, column families, and OCC transactions remain pending.
+> **Status (latest):** Phase 1 core + MVCC InternalKey pipeline (WP 1.2.2 A/B),
+> Manifest persistence (WP 1.2.4), SSTable block compression (WP 1.2.1),
+> **BlockCache** (decompressed data-block LRU keyed by `(sst_path, offset)`),
+> **MemTable `shared_ptr`** (Get/Iterator snapshot under lock, then lock-free),
+> and **master/sub Reactor** TCP server (epoll LT, `--io-threads` / `--biz-threads`).
+> Still pending: range deletes, column families, OCC transactions, compaction strategy switch.
 
 ---
 
@@ -16,23 +18,25 @@ the LSM-Tree layout, on-disk file formats, and durability model.
 minikv/
 ├── include/minikv/         Public headers (DB / Options / Slice / Iterator)
 ├── src/core/               LSM-Tree core
-│   ├── db_impl.{h,cpp}     Top-level DB orchestrator (open / put / get / del)
+│   ├── db_impl.{h,cpp}     DB orchestrator (group commit + flush queue)
 │   ├── memtable.{h,cpp}    SkipList-backed in-memory table
-│   ├── skip_list.h         Concurrent skip list (R/W lock)
-│   ├── wal.{h,cpp}         Write-ahead log
-│   ├── block.{h,cpp}       Sorted data block (LevelDB-style prefix sharing)
-│   ├── bloom_filter.h      Per-SST bloom filter (MurmurHash2, persists to .bloom)
-│   ├── sstable_builder.{h,cpp}  SSTable writer (compressed data blocks)
-│   ├── sstable_reader.{h,cpp}   SSTable reader (transparent decompression)
-│   ├── sstable_iterator.{h,cpp} Sequential iterator over one SST
-│   ├── memtable_iterator.{h,cpp} Sequential iterator over one MemTable
-│   ├── merging_iterator.{h,cpp}  Min-heap merge of children
-│   ├── compaction.{h,cpp}  Background compaction manager (L0 -> L1 stub)
-│   ├── version.{h,cpp}     In-memory view of LSM level contents
-│   ├── manifest.{h,cpp}    Durable record of Version edits (append-only)
-│   ├── compression.{h,cpp} Snappy / Zstd wrapper for block payload
-│   └── internal_key.{h,cpp} [user_key | seq | type] codec + comparator
-└── src/network/            HTTP server (kept from earlier MiniKV)
+│   ├── skip_list.h         Concurrent skip list (shared_mutex)
+│   ├── wal.{h,cpp}         Per-generation write-ahead log (wal-<N>.log)
+│   ├── block.{h,cpp}       Sorted data block (prefix sharing)
+│   ├── block_cache.h       Byte-capacity LRU for decompressed SST blocks
+│   ├── bloom_filter.h      Per-SST bloom (MurmurHash2)
+│   ├── sstable_builder.{h,cpp}
+│   ├── sstable_reader.{h,cpp}   Uses BlockCache when provided
+│   ├── sstable_iterator / memtable_iterator / merging_iterator
+│   ├── compaction.{h,cpp}  Background L0→L1+ merge
+│   ├── version.{h,cpp}     In-memory LSM topology
+│   ├── manifest.{h,cpp}    Durable Version edits
+│   ├── compression.{h,cpp} Snappy / Zstd
+│   └── internal_key.{h,cpp} [user_key | seq | type] codec
+└── src/network/            Native TCP server (master/sub Reactor, epoll LT)
+    ├── server.{h,cpp}      accept on Main; IO on Sub; biz pool optional
+    ├── event_loop*.{h,cpp} epoll + eventfd runInLoop
+    └── connection.{h,cpp}  sticky-packet buffer + in_flight_ serialisation
 ```
 
 ---
@@ -40,219 +44,124 @@ minikv/
 ## 2. LSM-Tree Shape
 
 ```
-        Write ─────► MemTable (SkipList, ~4MB default)
-                            │
-                            │ flushMemTable()
+        Write ─────► active MemTable (shared_ptr<MemTable>, SkipList)
+                            │ rotate when full
                             ▼
-                      L0  ┌─────────────────┐  (compaction trigger: 4 files)
-                          │ file_001.sst     │
-                          │ file_002.sst     │
-                          │ ...              │
-                          └─────────────────┘
-                            │ compaction (L0 -> L1)
+                      immutable_list_  (still readable by Get/Iterator)
+                            │ flush thread (flushOne, no write lock during IO)
                             ▼
-                      L1  ┌─────────────────┐  (Leveled; size-tiered planned)
-                          │ file_010.sst     │
-                          │ ...              │
-                          └─────────────────┘
-                            │ compaction (Ln -> Ln+1)
-                            ▼
-                       L2 ... L7
+                      L0 SSTables (overlapping) ──compaction──► L1 … L7
 ```
 
-Default `Options`:
+Default `Options` (see `include/minikv/options.h`):
 
-| Field                | Default  | Notes |
-|----------------------|----------|-------|
-| `memtable_size`      | 4 MB     | flush trigger |
-| `block_size`         | 4 KB     | SSTable data block |
-| `lru_cache_capacity` | 8 MB     | reserved for block cache |
-| `max_level`          | 7        | L0 .. L7 |
-| `level0_compaction_trigger` | 4 | L0 file count threshold |
-| `wal_sync`           | true     | fdatasync after each batch |
-| `bloom_filter_enabled` | true   | one bloom per SST, sidecar `.bloom` |
-| `bloom_false_positive_rate` | 0.01 | 7-8 bits/key |
-| `compression`        | 1 (snappy) | per-block compression scheme |
+| Field | Default | Notes |
+|-------|---------|-------|
+| `memtable_size` | 4 MB | flush trigger |
+| `block_size` | 4 KB | SST data block |
+| `lru_cache_capacity` | 8 MB | BlockCache capacity |
+| `max_level` | 7 | L0 .. L7 |
+| `level0_compaction_trigger` | 4 | L0 file count |
+| `wal_sync` | true (CLI may override) | fdatasync policy |
+| `compression` | 1 (snappy) | per-block |
 
 ---
 
-## 3. On-disk File Formats
+## 3. Concurrency: MemTable `shared_ptr` + BlockCache
 
-### 3.1 SSTable
+### 3.1 MemTable ownership
 
-```
-┌─────────────────────────────────────────────────────────┐
-│ Data block #0                                          │
-│ Data block #1                                          │
-│ ...                                                    │
-│ Data block #N                                          │
-│ Index block (8-byte header, uncompressed)              │
-│ Footer (48 bytes)                                      │
-└─────────────────────────────────────────────────────────┘
-```
+- `memtable_` and each entry in `immutable_list_` are `std::shared_ptr<MemTable>`.
+- **Get / newIterator**: under `write_mutex_`, copy `shared_ptr` snapshots of active + immutables, then **release the lock** and look up lock-free while refcounts keep tables alive.
+- **Flush**: flush thread holds the same `shared_ptr` via `flush_queue_`; heavy SST IO runs **without** `write_mutex_`; only erasing from `immutable_list_` re-acquires the lock briefly.
+- Writers still serialise on `write_mutex_` (group commit / WAL / rotate).
 
-**Data block header (13 bytes, WP 1.2.1):**
+### 3.2 BlockCache
 
-| Offset | Field               | Size |
-|--------|---------------------|------|
-| 0      | crc32c of payload   | 4    |
-| 4      | physical_size       | 4    |
-| 8      | uncompressed_size   | 4    |
-| 12     | compression_type    | 1    |
+- Key: `(sst_path, block_offset)`; value: decompressed block bytes.
+- Capacity: `Options::lru_cache_capacity` bytes; LRU eviction under mutex.
+- `SSTableReader::open(path, block_cache)` shares the cache; compaction/deletes call `invalidatePath`.
 
-`compression_type` is one of `CompressionType` (`kNone=0 / kSnappy=1 / kZstd=2`).
-Reader always trusts the recorded scheme, so an SST written with snappy can be
-read even if the engine's default `Options.compression` later changes.
+### 3.3 Network (minikv_server)
 
-Block payload (after decompression) uses LevelDB-style prefix-shared entries
-with a restart array at the tail (`BlockBuilder::add` / `BlockReader::get`).
-
-**Index block:** 8-byte `[crc(4)][size(4)]` header followed by
-`[varint last_user_key_len][last_user_key][offset(8)][size(8)]` entries — one
-per data block. Used to binary-search the block containing a key.
-
-**Footer (48 bytes, WP 1.2.1):**
-
-| Offset | Field            | Size | Notes |
-|--------|------------------|------|-------|
-| 0      | index_offset     | 8    | absolute offset of index block |
-| 8      | index_size       | 8    | including its 8-byte header |
-| 16     | format_version   | 1    | currently `1` |
-| 17     | reserved         | 23   | zeroed |
-| 40     | magic            | 8    | `0x4D4B53535441424C` ("MKSSTABL") |
-
-### 3.2 Bloom filter sidecar
-
-Stored as `<sst_path>.bloom`. Layout: `[num_hashes(4)][bits_per_key(4)][bits_size(8)][bits...]`.
-Bloom is consulted before any block read; a `mightContain` miss lets the
-reader skip the block entirely.
-
-### 3.3 WAL
-
-`<db_path>/wal.log`. Records are `[crc(4)][len(4)][payload]`. Payload is a
-concatenation of `[type(1)][key_len(4)][val_len(4)][key][value]` entries from
-the originating `WriteBatch`. `WAL::truncate()` is called after every
-successful MemTable flush so restart only replays unflushed data.
-
-### 3.4 MANIFEST
-
-`<db_path>/MANIFEST`. Append-only log of Version edits with `[crc(4)][size(4)][payload]`
-header. Payload:
-
-| Bytes | Field        |
-|-------|--------------|
-| 1     | type (kReset=0 / kAdd=1 / kDel=2) |
-| 4     | level (LE) |
-| 8     | file_number (LE) |
-| 4     | path length (LE) |
-| n     | path bytes |
-
-`Manifest::open()` replays the file end-to-end and reconstructs the in-memory
-levels vector. A torn tail record (CRC mismatch / short read) is silently
-discarded, giving crash-safe recovery. `Version::addLevelFile` /
-`removeLevelFiles` write through to MANIFEST and fsync, so every change to the
-LSM topology is durably logged before the WAL is truncated.
+- Main Reactor: accept only.
+- Sub Reactors: `--io-threads` (default **4**), epoll **LT**, `EPOLLIN` only.
+- Biz pool: `--biz-threads` (default **4**); `processRequest` off IO thread; response `queueInLoop` back to owning Sub.
+- `--io-threads 0` / `--biz-threads 0` collapse to single-thread / sync-on-Sub modes.
 
 ---
 
-## 4. Internal Key Codec (WP 1.2.2 Phase A)
+## 4. On-disk File Formats
 
-`core/internal_key.h` provides the future internal-key encoding while the
-hash-based MemTable remains in use:
+### 4.1 SSTable
 
-```
-internal_key = user_key_bytes || trailer(8 bytes LE)
-trailer      = (seq << 8) | static_cast<uint8_t>(ValueType)
-```
+Data blocks (13-byte compressed header) + Index + Footer(48B, magic `MKSSTABL`).
+See WP 1.2.1 notes in git history / `compression.cpp`.
 
-Sort order (`InternalKeyCompare`):
+### 4.2 Bloom sidecar
 
-1. user_key ascending (byte-wise)
-2. seq descending (so latest version sorts first)
-3. ValueType ascending (kValue before kDeletion)
+`<sst>.bloom` — consulted before block read.
 
-This matches the RocksDB convention and supports:
+### 4.3 WAL
 
-- **MVCC snapshot reads** — filter out entries with seq > snapshot
-- **Range deletes** — proper byte-wise ordering on user_key
-- **OCC transactions** — read/write set comparison with deterministic order
+Per MemTable generation: `wal-<N>.log`, records `[crc][len][payload]`.
+Rotate on flush; replay all residual WALs on open.
 
-Phase B of WP 1.2.2 rewires `SkipList` to use `std::string` keys (with
-`InternalKeyCompare` as comparator) and propagates the encoding through
-MemTable, SSTable builder/reader, and iterators.
+### 4.4 MANIFEST
+
+Append-only Version edits (`kReset` / `kAdd` / `kDel`); torn tail discarded.
 
 ---
 
-## 5. Write Path
+## 5. Internal Key (WP 1.2.2)
 
 ```
-Application
-   │
-   │ DB::put(key, value) ──or── DB::write(batch)
-   ▼
-DBImpl::write()
-   │ 1. Acquire write_mutex_
-   │ 2. Allocate sequence numbers from atomic seq_
-   │ 3. Append each op to MemTable (shared_mutex-protected SkipList)
-   │ 4. Append batch to WAL; fsync if Options.wal_sync && WriteOptions.sync
-   │ 5. maybeFlush(): if MemTable exceeded Options.memtable_size,
-   │    swap to immutable and trigger flushMemTable() on the same thread
-   ▼
-MemTable (SkipList)        WAL
+internal_key = user_key || trailer(8 LE)
+trailer      = (seq << 8) | ValueType
 ```
 
-`flushMemTable()` writes the immutable MemTable to a new SST in L0,
-calls `Version::addLevelFile(0, ...)` (which writes MANIFEST + fsyncs), and
-finally truncates the WAL. The background `CompactionManager` polls
-`Version::shouldCompactL0()` and triggers `compactL0()` when L0 exceeds 4 files.
+Compare: user_key ASC, seq DESC, type ASC. Used end-to-end in MemTable / SST / iterators.
 
 ---
 
-## 6. Read Path
+## 6. Write Path
 
 ```
-Application
-   │
-   │ DB::get(key)
-   ▼
-DBImpl::get()
-   │ 1. MemTable::get(key, seq_) → newest matching entry (R-lock)
-   │ 2. immutable_memtable_->get(...) if present
-   │ 3. For each level 0..N, for each SST in level:
-   │      - SSTableReader::open(path) (cached upstream in future)
-   │      - BloomFilter::mightContain(key)  → skip if false
-   │      - Index binary search → block handle
-   │      - readBlock(): read 13B header, validate CRC, decompress payload
-   │      - BlockReader::get(key) → value if present
-   │ 4. Return first hit (newest seq wins because levels are visited L0..LN)
+put/write → group commit (optional batching) → WAL append → MemTable insert
+         → maybeFlush: rotate memtable_ into immutable_list_ + flush_queue_
+         → flush thread: build L0 SST → Version/MANIFEST → drop WAL files
+         → CompactionManager may compact L0→L1+
 ```
-
-Iterators (`newIterator`) merge MemTable + immutable MemTable + every SST via
-`MergingIterator`, which is a min-heap keyed by the iterator's `key()` bytes.
 
 ---
 
-## 7. Durability Model
+## 7. Read Path
 
-| Event                          | Effect                                                                                       |
-|--------------------------------|----------------------------------------------------------------------------------------------|
-| Clean shutdown                 | MemTable flushed; WAL truncated; MANIFEST up to date.                                        |
-| Crash before WAL fsync         | Last batch lost; MANIFEST + prior SSTs intact.                                               |
-| Crash after WAL fsync, before SST flush | WAL replayed on restart → MemTable rebuilt → flush re-creates the missing SST.     |
-| Crash during SST write         | Partial SST on disk; MANIFEST does not list it (Version::addLevelFile hasn't run); ignored. |
-| Crash after SST + MANIFEST fsync, before WAL truncate | WAL still has the data; on restart WAL replays into MemTable and flushes a duplicate SST. MergingIterator dedupes by key. |
-| Crash mid-MANIFEST append      | Tail record has bad CRC / short length; replay discards it. No phantom entries loaded.      |
+```
+get → snapshot shared_ptr MemTables (lock) → search active+immutables (lock-free)
+    → for each SST: Bloom → index → BlockCache miss? read+decompress+cache → block get
+```
 
 ---
 
-## 8. Pending Work
+## 8. Durability Model
 
-| WP       | Topic                              | Why it matters                                                |
-|----------|------------------------------------|---------------------------------------------------------------|
-| 1.2.2 B  | SkipList string-key rewire + MVCC  | Fixes the hash-based internal-key collision risk; enables snapshot reads. |
-| 1.2.3    | Range Delete                       | Requires WP 1.2.2 B for correct byte-wise user_key ordering. |
-| 1.2.5    | Column Family                      | Multi-namespace isolation; shared WAL with CF-prefix encoding. |
-| 1.2.6    | Optimistic transactions (OCC)      | Begin / Commit / Rollback on top of MVCC snapshot reads.     |
-| 1.2.7    | Compaction strategy switch         | Leveled (current) vs Size-tiered; benchmarked via `benches/`. |
+| Event | Effect |
+|-------|--------|
+| Crash before WAL sync | last batch may be lost |
+| Crash after WAL, before SST | WAL replay rebuilds MemTable |
+| Crash mid-SST | MANIFEST never listed partial file → ignored |
+| Crash mid-MANIFEST append | bad CRC tail discarded |
 
-See `docs/REFACTORING.md` for cross-cutting tracking.
+---
+
+## 9. Pending Work
+
+| WP | Topic |
+|----|-------|
+| 1.2.3 | Range Delete |
+| 1.2.5 | Column Family |
+| 1.2.6 | OCC transactions |
+| 1.2.7 | Compaction strategy switch |
+
+See `docs/REFACTORING.md`.

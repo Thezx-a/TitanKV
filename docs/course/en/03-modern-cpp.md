@@ -1,6 +1,6 @@
 # Module 03 — Modern C++ & Concurrency
 
-> Source: [skip_list.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h), [thread_pool.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/thread_pool.h), [lru_cache.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/lru_cache.h), [db_impl.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.h)
+> Source: [skip_list.h](../../../minikv/src/core/skip_list.h), [thread_pool.h](../../../minikv/src/utils/thread_pool.h), [lru_cache.h](../../../minikv/src/utils/lru_cache.h), [db_impl.h](../../../minikv/src/core/db_impl.h)
 
 ## Background & Motivation
 
@@ -24,7 +24,7 @@ After this module, you'll be able to answer "When does `shared_ptr`'s control bl
 
 ### 2.1 Smart Pointers
 
-[db_impl.h:39-42](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.h) manages WAL/Manifest/MemTable with `std::unique_ptr`:
+[db_impl.h:39-42](../../../minikv/src/core/db_impl.h) manages WAL/Manifest/MemTable with `std::unique_ptr`:
 
 ```cpp
 std::unique_ptr<WAL>      wal_;
@@ -50,7 +50,7 @@ graph TD
 
 ### 2.2 Move Semantics
 
-[thread_pool.h:22-26](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/thread_pool.h) moves the task on submit:
+[thread_pool.h:22-26](../../../minikv/src/utils/thread_pool.h) moves the task on submit:
 
 ```cpp
 void submit(std::function<void()> task) {
@@ -70,7 +70,7 @@ void submit(std::function<void()> task) {
 
 ### 2.3 Lambdas
 
-[thread_pool.h:17](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/thread_pool.h) starts a worker with a lambda:
+[thread_pool.h:17](../../../minikv/src/utils/thread_pool.h) starts a worker with a lambda:
 
 ```cpp
 workers_.emplace_back([this] { workerLoop(); });
@@ -82,13 +82,13 @@ workers_.emplace_back([this] { workerLoop(); });
 
 ### 2.4 `constexpr` Compile-Time Evaluation
 
-A `constexpr` function/variable can be evaluated at compile time, with the result inlined — zero runtime cost. In minikv, [skip_list.h:25](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h) uses `static constexpr int kMaxLevel = 32;` for a compile-time constant.
+A `constexpr` function/variable can be evaluated at compile time, with the result inlined — zero runtime cost. In minikv, [skip_list.h:25](../../../minikv/src/core/skip_list.h) uses `static constexpr int kMaxLevel = 32;` for a compile-time constant.
 
 C++20 adds `consteval` (forces compile-time evaluation, no runtime calls allowed) and `constinit` (forces compile-time initialization, preventing static-init-order issues).
 
 ### 2.5 The `shared_mutex` RW Lock
 
-[skip_list.h:39-40](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h) takes a write lock in `put`:
+[skip_list.h:39-40](../../../minikv/src/core/skip_list.h) takes a write lock in `put`:
 
 ```cpp
 void put(const std::string& key, const std::string& value) {
@@ -97,7 +97,7 @@ void put(const std::string& key, const std::string& value) {
 }
 ```
 
-while `get` takes a read lock (see [skip_list.h:68-69](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h)):
+while `get` takes a read lock (see [skip_list.h:68-69](../../../minikv/src/core/skip_list.h)):
 
 ```cpp
 std::optional<std::string> get(const std::string& key) const {
@@ -112,7 +112,7 @@ std::optional<std::string> get(const std::string& key) const {
 
 ### 2.6 `atomic` and Memory Orders
 
-[thread_pool.h:57](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/thread_pool.h) uses `std::atomic<bool> running_`:
+[thread_pool.h:57](../../../minikv/src/utils/thread_pool.h) uses `std::atomic<bool> running_`:
 
 ```cpp
 std::atomic<bool> running_;   // stop() sets false; workers poll it
@@ -129,7 +129,7 @@ std::atomic<bool> running_;   // stop() sets false; workers poll it
 
 ### 2.7 `condition_variable` and Spurious Wakeups
 
-[thread_pool.h:43-48](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/thread_pool.h) is a classic producer-consumer:
+[thread_pool.h:43-48](../../../minikv/src/utils/thread_pool.h) is a classic producer-consumer:
 
 ```cpp
 std::unique_lock<std::mutex> lock(mutex_);
@@ -146,7 +146,7 @@ tasks_.pop();
 
 ### 2.8 `mutable` and const Members
 
-[lru_cache.h:56](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/lru_cache.h) declares `mutex_` as `mutable`:
+[lru_cache.h:56](../../../minikv/src/utils/lru_cache.h) declares `mutex_` as `mutable`:
 
 ```cpp
 private:
@@ -265,9 +265,9 @@ void log(Args&&... args) {
 
 ### Exercise 4.1 (Hand-write a RW-locked SkipList, LeetCode 1206 advanced)
 
-Following [skip_list.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h), implement a thread-safe skiplist: `put` takes a write lock, `get`/`entries` take read locks. Verify no races with 10 threads each inserting 10,000 keys.
+Following [skip_list.h](../../../minikv/src/core/skip_list.h), implement a thread-safe skiplist: `put` takes a write lock, `get`/`entries` take read locks. Verify no races with 10 threads each inserting 10,000 keys.
 
-### Exercise 4.2 (Extend the ThreadPool, per [thread_pool.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/thread_pool.h))
+### Exercise 4.2 (Extend the ThreadPool, per [thread_pool.h](../../../minikv/src/utils/thread_pool.h))
 
 Build on the existing `ThreadPool` and add:
 

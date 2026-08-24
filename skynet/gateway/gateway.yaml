@@ -4,7 +4,7 @@
 #
 # skynet 前置反向代理 — epoll ET + C++20 协程事件环
 # 对外 :8080 → Gin 内网 :18080
-# 单线程 IOContext::poll + co_await 挂起/恢复（非线程池阻塞 IO）
+# 主从 Reactor：Main accept + Sub(listen.threads) 各 IOContext；epoll ET + co_await（非阻塞线程池 IO）
 listen:
   port: 8080
   threads: 4

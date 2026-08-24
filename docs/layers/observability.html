@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>可观测性 · Observability · TitanKV</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand"><a href="index.html">TitanKV</a> <small>分层知识图谱</small></div>
+    <nav>
+      <a href="index.html#layers">分层总览</a>
+      <a href="index.html#flow">请求链路</a>
+      <a href="https://github.com/Thezx-a/TitanKV" target="_blank" rel="noopener">源码 ↗</a>
+    </nav>
+  </div>
+</header>
+
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="side-title">分层导航</div>
+    <ul class="side-list">
+      <li><a href="client.html"><span class="layer-num">L1</span>客户端层</a></li>
+      <li><a href="network.html"><span class="layer-num">L2</span>网络库 Skynet</a></li>
+      <li><a href="gateway.html"><span class="layer-num">L3</span>网关层</a></li>
+      <li><a href="services.html"><span class="layer-num">L4</span>微服务层</a></li>
+      <li><a href="distributed.html"><span class="layer-num">L5</span>分布式层</a></li>
+      <li><a href="storage.html"><span class="layer-num">L6</span>存储引擎</a></li>
+      <li><a href="observability.html" class="active"><span class="layer-num">L7</span>可观测性</a></li>
+      <li><a href="web.html"><span class="layer-num">L8</span>前端控制台</a></li>
+    </ul>
+    <a class="side-back" href="index.html">← 返回总览</a>
+  </aside>
+
+  <main class="content">
+
+    <div class="page-head">
+      <div class="crumb"><a href="index.html">总览</a><span class="sep">/</span>可观测性</div>
+      <h1>Observability · 横切所有层</h1>
+      <p class="desc">
+        可观测性栈不是独立的一层，而是横切所有层：每个服务暴露 <code>/metrics</code> 给 Prometheus 抓取，
+        Grafana 做可视化，Jaeger 做分布式追踪，Redis 兼任限流与 jti 黑名单。一键 <code>make docker-up</code> 拉起。
+      </p>
+      <div class="meta">
+        <span class="chip">Prometheus</span>
+        <span class="chip">Grafana :3001</span>
+        <span class="chip">Jaeger :16686</span>
+        <span class="chip">Redis</span>
+        <span class="chip">/metrics</span>
+        <span class="chip">分布式追踪</span>
+      </div>
+    </div>
+
+    <h2>可观测性三支柱</h2>
+    <div class="arch-diagram">┌────────────────────────────────────────────────────────────────┐
+│  Metrics（指标）        │  Tracing（追踪）         │  Logging（日志）        │
+│  Prometheus 抓 /metrics │  Jaeger 跨服务关联       │  结构化日志 + RequestID │
+│  Grafana 可视化          │  gateway→service→storage │  贯穿洋葱中间件链       │
+└────────────────────────────────────────────────────────────────┘
+                           ▲
+                           │ 横切
+        ┌──────────────────┼────────────────────────┐
+        ▼                  ▼                        ▼
+   Go 微服务         Gin 网关              C++ minikv_server
+   (prometheus client) (metrics.GinMiddleware)  (原生指标暴露)</div>
+
+    <h2>核心组件知识点</h2>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>Prometheus · 指标抓取</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/deploy/dev/prometheus.yml">deploy/dev/prometheus.yml</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/services/observability/metrics.go">services/observability/metrics.go</a></span>
+      </div>
+      <div class="block-body">
+        <ul>
+          <li><strong>抓取目标</strong>：各服务的 <code>/metrics</code> 端点，<code>prometheus.yml</code> 配置 scrape_configs。</li>
+          <li><strong>指标暴露</strong>：Go 服务用 prometheus client，<code>services/observability/metrics.go</code> 定义业务指标。</li>
+          <li><strong>HTTP 中间件</strong>：<code>pkg/metrics.GinMiddleware("gateway")</code> 自动记录请求计数 / 延迟分布。</li>
+          <li><strong>注册路由</strong>：<code>metrics.RegisterRoutes(r)</code> 暴露 <code>/metrics</code> 给 Prometheus。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>Grafana · 可视化仪表盘</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/deploy/dev/docker-compose.yml">deploy/dev/docker-compose.yml</a></span>
+      </div>
+      <div class="block-body">
+        <p>以 Prometheus 为数据源，构建请求 QPS / 延迟分位 / 错误率 / 业务规模等仪表盘。默认 <code>http://localhost:3001</code>。</p>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>Jaeger · 分布式链路追踪</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/deploy/dev/docker-compose.yml">deploy/dev/docker-compose.yml</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/gateway/middleware/request_id.go">middleware/request_id.go</a></span>
+      </div>
+      <div class="block-body">
+        <p>跨网关 → 微服务 → 存储引擎关联一次请求的全链路。<code>X-Request-ID</code> 由网关生成，透传给后端，Jaeger UI 默认 <code>http://localhost:16686</code>。</p>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>Redis · 限流 + jti 黑名单</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/gateway/middleware/ratelimit.go">middleware/ratelimit.go</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/gateway/middleware/auth.go">middleware/auth.go</a></span>
+      </div>
+      <div class="block-body">
+        <ul>
+          <li><strong>限流</strong>：令牌桶 <code>burst=100, sustained=10/s</code>，Redis 故障时降级为无限制。</li>
+          <li><strong>jti 黑名单</strong>：登出写入 <code>revoked:jti:&lt;id&gt;</code>，TTL = token 剩余有效期。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>Observability 服务 · 聚合与采集</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/services/observability/">services/observability/</a></span>
+      </div>
+      <div class="block-body">
+        <ul>
+          <li><strong>metrics.go</strong>：业务指标定义与暴露。</li>
+          <li><strong>scraper.go</strong>：周期采集其他服务指标，聚合展示。</li>
+          <li><strong>handler.go</strong>：HTTP 接口。</li>
+          <li><strong>cmd/main.go</strong>：服务入口，默认 :8084。</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>一键拉起本地栈</h2>
+    <pre><code># 拉起 Postgres / Redis / etcd / Jaeger / Prometheus / Grafana
+make docker-up
+
+# 默认端口
+#   Grafana      http://localhost:3001
+#   Jaeger UI    http://localhost:16686
+#   Prometheus   http://localhost:9090
+#   Redis        localhost:6379
+#   Postgres     localhost:5432
+#   etcd         localhost:2379
+
+make docker-down   # 关闭</code></pre>
+
+    <h2>关键源码索引</h2>
+    <ul class="file-list">
+      <li><span class="fp">deploy/dev/docker-compose.yml</span><span class="fd">本地可观测性栈编排</span></li>
+      <li><span class="fp">deploy/dev/prometheus.yml</span><span class="fd">Prometheus 抓取配置</span></li>
+      <li><span class="fp">pkg/metrics/metrics.go</span><span class="fd">Gin 中间件 + 指标注册</span></li>
+      <li><span class="fp">services/observability/metrics.go · scraper.go · handler.go</span><span class="fd">聚合与采集服务</span></li>
+      <li><span class="fp">gateway/middleware/ratelimit.go · request_id.go</span><span class="fd">限流 + 请求 ID 追踪</span></li>
+    </ul>
+
+  
+    <h2 id="structure">详细目录结构</h2>
+    <pre><code>pkg/metrics/
+└── metrics.go          GinMiddleware + /metrics 端点
+
+services/observability/
+├── metrics.go          指标聚合
+├── scraper.go          周期抓取各服务 /metrics
+└── cmd/main.go         :8084
+
+deploy/dev/
+├── docker-compose.yml  Postgres/Redis/etcd/Jaeger/Prometheus/Grafana
+└── prometheus.yml      scrape 配置</code></pre>
+
+  </main>
+</div>
+
+</body>
+</html>

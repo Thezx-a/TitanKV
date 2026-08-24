@@ -1,6 +1,6 @@
 # Module 08 — Compaction 与 MVCC
 
-> 对应源码：[internal_key.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/internal_key.h)、[compaction.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/compaction.h)、[manifest.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/manifest.h)、[version.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/version.h)
+> 对应源码：[internal_key.h](../../../minikv/src/core/internal_key.h)、[compaction.h](../../../minikv/src/core/compaction.h)、[manifest.h](../../../minikv/src/core/manifest.h)、[version.h](../../../minikv/src/core/version.h)
 
 ## 背景与动机
 
@@ -24,7 +24,7 @@ Compaction 就是来解决前者的——它把多层 SSTable 归并排序、去
 
 ### 2.1 InternalKey 编码
 
-[internal_key.h:27-40](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/internal_key.h)：
+[internal_key.h:27-40](../../../minikv/src/core/internal_key.h)：
 
 ```
 internal_key = user_key_bytes || trailer(8 bytes)
@@ -64,7 +64,7 @@ trailer      = uint64 LE of ((seq << 8) | type)
 
 ### 2.4 Compaction 策略对比
 
-[compaction.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/compaction.h) 的 `CompactionManager` 提供 `compactL0()` 和 `compactLevel(level)`：
+[compaction.h](../../../minikv/src/core/compaction.h) 的 `CompactionManager` 提供 `compactL0()` 和 `compactLevel(level)`：
 
 | 策略 | Leveled | Tiered (Size-Tiered) |
 |---|---|---|
@@ -90,7 +90,7 @@ minikv 采用 Leveled（`compactLevel` 把 L_i 与 L_{i+1} 重叠文件归并）
 5. 原子替换：旧文件从 Version 移除，新文件加入，记录到 Manifest。
 6. 删除旧 SSTable 文件。
 
-`CompactionManager` 在后台线程 `compactionLoop` 轮询（[compaction.h:25](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/compaction.h)），`triggerCompaction()` 可主动触发。
+`CompactionManager` 在后台线程 `compactionLoop` 轮询（[compaction.h:25](../../../minikv/src/core/compaction.h)），`triggerCompaction()` 可主动触发。
 
 #### Compaction 流程图
 
@@ -131,9 +131,9 @@ flowchart LR
 
 ### 2.6 Manifest 持久化
 
-[manifest.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/manifest.h) 记录 Version 变更（哪些 SSTable 存在）。格式：追加写 `[crc(4)][size(4)][payload]`，记录类型 `kReset / kAdd / kDel`。
+[manifest.h](../../../minikv/src/core/manifest.h) 记录 Version 变更（哪些 SSTable 存在）。格式：追加写 `[crc(4)][size(4)][payload]`，记录类型 `kReset / kAdd / kDel`。
 
-恢复流程（[db_impl.cpp:45-53](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.cpp)）：
+恢复流程（[db_impl.cpp:45-53](../../../minikv/src/core/db_impl.cpp)）：
 
 1. `manifest_->open()` 打开 Manifest 文件。
 2. `version_.restoreFrom(manifest_->levels())` 重放全部记录，重建当前 Version 快照。
@@ -143,7 +143,7 @@ flowchart LR
 
 ### 2.7 MVCC 快照读
 
-每次 `Get` 带 `seq_.load()` 作为快照（[db_impl.cpp:118-119](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.cpp)）：
+每次 `Get` 带 `seq_.load()` 作为快照（[db_impl.cpp:118-119](../../../minikv/src/core/db_impl.cpp)）：
 
 ```cpp
 auto result = memtable_->get(key, seq_.load());

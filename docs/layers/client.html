@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>客户端层 · Client · TitanKV</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand"><a href="index.html">TitanKV</a> <small>分层知识图谱</small></div>
+    <nav>
+      <a href="index.html#layers">分层总览</a>
+      <a href="index.html#flow">请求链路</a>
+      <a href="https://github.com/Thezx-a/TitanKV" target="_blank" rel="noopener">源码 ↗</a>
+    </nav>
+  </div>
+</header>
+
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="side-title">分层导航</div>
+    <ul class="side-list">
+      <li><a href="client.html" class="active"><span class="layer-num">L1</span>客户端层</a></li>
+      <li><a href="network.html"><span class="layer-num">L2</span>网络库 Skynet</a></li>
+      <li><a href="gateway.html"><span class="layer-num">L3</span>网关层</a></li>
+      <li><a href="services.html"><span class="layer-num">L4</span>微服务层</a></li>
+      <li><a href="distributed.html"><span class="layer-num">L5</span>分布式层</a></li>
+      <li><a href="storage.html"><span class="layer-num">L6</span>存储引擎</a></li>
+      <li><a href="observability.html"><span class="layer-num">L7</span>可观测性</a></li>
+      <li><a href="web.html"><span class="layer-num">L8</span>前端控制台</a></li>
+    </ul>
+    <a class="side-back" href="index.html">← 返回总览</a>
+  </aside>
+
+  <main class="content">
+
+    <div class="page-head">
+      <div class="crumb"><a href="index.html">总览</a><span class="sep">/</span>客户端层</div>
+      <h1>Client Layer · 三种接入方式</h1>
+      <p class="desc">
+        客户端层提供三种接入：Next.js 控制台（人类）、Cobra CLI（运维/脚本）、Go SDK（机器对机器）。
+        三者最终都打 Gateway 的 :8080，鉴权方式各异。
+      </p>
+      <div class="meta">
+        <span class="chip">Next.js 控制台</span>
+        <span class="chip">Cobra CLI · keyforge</span>
+        <span class="chip">Go SDK titan</span>
+        <span class="chip">JWT / APIKey</span>
+        <span class="chip">SSE scan</span>
+      </div>
+    </div>
+
+    <h2>三种客户端对比</h2>
+    <table class="kp">
+      <thead><tr><th>客户端</th><th>目录</th><th>鉴权</th><th>用途</th></tr></thead>
+      <tbody>
+        <tr><td>Web 控制台</td><td><code>web/</code></td><td>JWT (cookie titan_token)</td><td>人类可视化管理</td></tr>
+        <tr><td>CLI · keyforge</td><td><code>client-cli/main.go</code></td><td>JWT (--token / TITANKV_TOKEN)</td><td>运维 / 脚本</td></tr>
+        <tr><td>Go SDK titan</td><td><code>client-go/titan/</code></td><td>APIKey 或 JWT Login</td><td>机器对机器集成</td></tr>
+      </tbody>
+    </table>
+
+    <h2>核心组件知识点</h2>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>keyforge CLI · Cobra 命令行</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/client-cli/main.go">client-cli/main.go</a></span>
+      </div>
+      <div class="block-body">
+        <p>用 <code>spf13/cobra</code> 实现的 KV 操作命令行工具，名叫 <code>keyforge</code>，通过 Gateway 调用。</p>
+        <ul>
+          <li><strong>子命令</strong>：<code>ping</code> 健康检查、<code>put &lt;key&gt; &lt;value&gt;</code>、<code>get &lt;key&gt;</code>、<code>scan --start --end</code>（SSE 流式）。</li>
+          <li><strong>持久参数</strong>：<code>--url</code>（默认 <code>http://127.0.0.1:8080</code>，环境 <code>TITANKV_URL</code>）、<code>--token</code>（环境 <code>TITANKV_TOKEN</code>）。</li>
+          <li><strong>鉴权</strong>：<code>addAuth()</code> 注入 <code>Authorization: Bearer &lt;token&gt;</code>。</li>
+          <li><strong>scan SSE</strong>：<code>io.Copy(os.Stdout, resp.Body)</code> 直接把流式响应打到标准输出。</li>
+          <li><strong>错误处理</strong>：<code>resp.StatusCode &gt;= 400</code> 时返回 <code>HTTP %d</code>。</li>
+        </ul>
+        <pre><code># ping
+keyforge ping --url http://localhost:8080
+
+# put (需 token)
+keyforge put foo bar --token $TITANKV_TOKEN
+
+# 流式 scan
+keyforge scan --start a --end z --token $TITANKV_TOKEN</code></pre>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>Go SDK · titan.Client</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/client-go/titan/client.go">client-go/titan/client.go</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/client-go/titan/types.go">types.go</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/client-go/titan/errors.go">errors.go</a></span>
+      </div>
+      <div class="block-body">
+        <p>面向程序集成的 Go 客户端，支持 APIKey（机器对机器）或 JWT Login 两种鉴权，内置重试。</p>
+        <ul>
+          <li><strong>Client 结构</strong>：<code>gatewayURL / apiKey / http / maxRetries</code>。</li>
+          <li><strong>Option 模式</strong>：<code>WithMaxRetries(n)</code>（默认 3）、<code>WithHTTPClient(h)</code>（自定义代理/超时）。</li>
+          <li><strong>New(gatewayURL, apiKey, opts...)</strong>：apiKey 为空时用 JWT，单独调 <code>Login</code>。</li>
+          <li><strong>默认超时</strong>：10s。</li>
+          <li><strong>API</strong>：<code>Login / Put / Get / Delete / Scan</code> 等。</li>
+          <li><strong>错误</strong>：<code>errors.go</code> 定义结构化错误类型。</li>
+          <li><strong>类型</strong>：<code>types.go</code> 定义 <code>LoginResponse</code> 等数据结构。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>Web 控制台 · 人类接入</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/web/">web/</a>（详见 <a href="web.html">前端控制台层</a>）</span>
+      </div>
+      <div class="block-body">
+        <p>Next.js 14 控制台，登录后写 <code>titan_token</code> cookie，<code>apiFetch</code> 自动注入 Bearer，<code>middleware.ts</code> 路由级保护。详情见 <a href="web.html">前端控制台层</a>。</p>
+      </div>
+    </div>
+
+    <h2>鉴权方式对照</h2>
+    <table class="kp">
+      <thead><tr><th>方式</th><th>Header</th><th>典型客户端</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>JWT Access Token</td><td><code>Authorization: Bearer &lt;jwt&gt;</code></td><td>Web / CLI / SDK(Login)</td><td>30min，可吊销 jti</td></tr>
+        <tr><td>API Key</td><td><code>X-API-Key: &lt;key&gt;</code></td><td>SDK (机器对机器)</td><td>服务端只存 SHA256</td></tr>
+        <tr><td>Refresh Token</td><td>调 <code>/api/auth/refresh</code> 换 Access</td><td>Web / SDK</td><td>7d，不带 role</td></tr>
+      </tbody>
+    </table>
+
+    <h2>关键源码索引</h2>
+    <ul class="file-list">
+      <li><span class="fp">client-cli/main.go</span><span class="fd">keyforge CLI：ping / put / get / scan (cobra)</span></li>
+      <li><span class="fp">client-go/titan/client.go</span><span class="fd">Go SDK Client + Option 模式 + 重试</span></li>
+      <li><span class="fp">client-go/titan/types.go · errors.go</span><span class="fd">数据结构 + 错误类型</span></li>
+      <li><span class="fp">web/</span><span class="fd">Next.js 控制台（见前端层）</span></li>
+    </ul>
+
+  
+    <h2 id="structure">详细目录结构</h2>
+    <pre><code>client-cli/
+└── main.go             keyforge: ping/put/get/scan (Cobra)
+
+client-go/titan/
+├── client.go           Client + Option 模式 + 重试
+├── types.go            KV/Collection 类型
+└── errors.go            typed errors
+
+web/                    → 见 web.html (L8 控制台)</code></pre>
+
+  </main>
+</div>
+
+</body>
+</html>

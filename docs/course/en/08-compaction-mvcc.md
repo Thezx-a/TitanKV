@@ -1,6 +1,6 @@
 # Module 08 — Compaction & MVCC
 
-> Source: [internal_key.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/internal_key.h), [compaction.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/compaction.h), [manifest.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/manifest.h), [version.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/version.h)
+> Source: [internal_key.h](../../../minikv/src/core/internal_key.h), [compaction.h](../../../minikv/src/core/compaction.h), [manifest.h](../../../minikv/src/core/manifest.h), [version.h](../../../minikv/src/core/version.h)
 
 ## Background & Motivation
 
@@ -24,7 +24,7 @@ By the end of this module, you should be able to explain why InternalKey puts `s
 
 ### 2.1 InternalKey Encoding
 
-[internal_key.h:27-40](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/internal_key.h):
+[internal_key.h:27-40](../../../minikv/src/core/internal_key.h):
 
 ```
 internal_key = user_key_bytes || trailer(8 bytes)
@@ -64,7 +64,7 @@ Why tombstones:
 
 ### 2.4 Compaction Strategy Comparison
 
-`CompactionManager` in [compaction.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/compaction.h) provides `compactL0()` and `compactLevel(level)`:
+`CompactionManager` in [compaction.h](../../../minikv/src/core/compaction.h) provides `compactL0()` and `compactLevel(level)`:
 
 | Strategy | Leveled | Tiered (Size-Tiered) |
 |---|---|---|
@@ -90,7 +90,7 @@ Typical `compactL0` steps:
 5. Atomic swap: remove old files from the Version, add new ones, record to the Manifest.
 6. Delete the old SSTable files.
 
-`CompactionManager` runs a background thread `compactionLoop` ([compaction.h:25](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/compaction.h)); `triggerCompaction()` can trigger it manually.
+`CompactionManager` runs a background thread `compactionLoop` ([compaction.h:25](../../../minikv/src/core/compaction.h)); `triggerCompaction()` can trigger it manually.
 
 #### Compaction Flow
 
@@ -131,9 +131,9 @@ flowchart LR
 
 ### 2.6 Manifest Persistence
 
-[manifest.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/manifest.h) records Version changes (which SSTables exist). Format: append-only `[crc(4)][size(4)][payload]`, record types `kReset / kAdd / kDel`.
+[manifest.h](../../../minikv/src/core/manifest.h) records Version changes (which SSTables exist). Format: append-only `[crc(4)][size(4)][payload]`, record types `kReset / kAdd / kDel`.
 
-Recovery flow ([db_impl.cpp:45-53](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.cpp)):
+Recovery flow ([db_impl.cpp:45-53](../../../minikv/src/core/db_impl.cpp)):
 
 1. `manifest_->open()` opens the Manifest file.
 2. `version_.restoreFrom(manifest_->levels())` replays all records, rebuilding the current Version snapshot.
@@ -143,7 +143,7 @@ Recovery flow ([db_impl.cpp:45-53](file:///c:/Users/Administrator/Desktop/helloc
 
 ### 2.7 MVCC Snapshot Reads
 
-Each `Get` carries `seq_.load()` as the snapshot ([db_impl.cpp:118-119](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.cpp)):
+Each `Get` carries `seq_.load()` as the snapshot ([db_impl.cpp:118-119](../../../minikv/src/core/db_impl.cpp)):
 
 ```cpp
 auto result = memtable_->get(key, seq_.load());

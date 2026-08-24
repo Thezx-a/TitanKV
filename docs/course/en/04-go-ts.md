@@ -1,6 +1,6 @@
 # Module 04 — Go & TypeScript Basics
 
-> Source: [go.mod](file:///c:/Users/Administrator/Desktop/hellocpp/go.mod) (`github.com/titan-kv/titan`), REFACTORING.md Phase 3-6 (gateway/services/web)
+> Source: [go.mod](../../../go.mod) (`github.com/titan-kv/titan`), REFACTORING.md Phase 3-6 (gateway/services/web)
 
 ## Background & Motivation
 
@@ -23,7 +23,7 @@ After this module, you'll be able to answer "Why use goroutines instead of OS th
 
 ### 2.1 Why TitanKV Uses Go for the Business Layer
 
-The architecture split (from [README.md](file:///c:/Users/Administrator/Desktop/hellocpp/README.md)):
+The architecture split (from [README.md](../../../README.md)):
 
 - **C++ storage engine** (minikv): extreme performance, zero overhead, controllable memory.
 - **Go microservices** (gateway/services): development efficiency and concurrency expressiveness, wired together with gRPC.

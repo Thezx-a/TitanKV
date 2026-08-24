@@ -34,12 +34,12 @@ git clone https://github.com/Thezx-a/TitanKV.git titan-kv
 cd titan-kv
 ```
 
-若你已在 Windows 桌面改代码，可用：
+若你已在 Windows / WSL 其它路径改代码，可用 rsync 同步到 Linux 家目录：
 
 ```bash
 rsync -a --delete \
   --exclude 'build' --exclude 'build-*' --exclude 'web/node_modules' --exclude 'web/.next' \
-  /mnt/c/Users/Administrator/Desktop/hellocpp/ ~/titan-kv/
+  /mnt/d/SpectrumCore/ ~/titan-kv/
 cd ~/titan-kv
 ```
 
@@ -119,7 +119,7 @@ go mod tidy
 go build ./...
 ```
 
-一键起 5 个服务（auth/data/meta/observability/gateway）：
+一键起 minikv + Go 服务（auth/data/meta/observability/rag/gateway）+ skynet 前置：
 
 ```bash
 make run-all
@@ -130,7 +130,7 @@ make run-all
 ```bash
 curl -s http://127.0.0.1:8080/ping
 
-> `make run-all` 现在：对外 **:8080 = skynet 前置反向代理**（半包拼包 / 线程池 / SSE 流式 / 优雅退出）→ Gin `:18080` → Data/Auth…。单独跑 Gin 仍是 `make run-gateway`（默认 :8080）。验证前置：`make smoke-skynet`。
+> `make run-all` 现在：对外 **:8080 = skynet 前置**（epoll **ET** + C++20 协程，主从 Reactor；读完 HTTP 后 LB 转发）→ Gin `:18080` → Auth/Data/Meta/Observ/RAG…。单独跑 Gin 仍是 `make run-gateway`（默认 :8080）。验证前置：`make smoke-skynet`。
 ```
 
 | 服务 | 端口 |
@@ -141,6 +141,9 @@ curl -s http://127.0.0.1:8080/ping
 | Auth | 8082 |
 | Meta | 8083 |
 | Observability | 8084 |
+| RAG | 8085 |
+| minikv_server（TCP） | 8888 |
+| Raft 教学节点（可选 `cmd/raft`） | 8090/8091 |
 
 ---
 
@@ -173,7 +176,9 @@ make docker-up
 | `skynet/` | C++20 协程网络库 | 根 CMake / 独立 `cmake -S skynet` |
 | `cmd/*` | Go 服务入口 | `go run ./cmd/gateway` 等 |
 | `gateway/` | Go Gin 网关库 | 由 `cmd/gateway` 引用 |
-| `services/*` | Auth / Data / Meta / Observ 库 | 由 `cmd/*` 引用 |
+| `services/*` | Auth / Data / Meta / Observ / RAG 库 | 由 `cmd/*` 或 `services/rag/cmd` 引用 |
+| `distributed/` | hashicorp/raft 教学模块（1-node / JoinCluster） | `go test ./distributed/...` / `cmd/raft` |
+| `client-cli/` | Cobra CLI `keyforge`（put/get/scan/ping） | `go run ./client-cli` |
 | `web/` | Next.js 控制台 | `npm run dev` |
 | `deploy/dev/` | 本地依赖 compose | `make docker-up` |
 | `docs/course/` | 双语课程 | 阅读即可 |

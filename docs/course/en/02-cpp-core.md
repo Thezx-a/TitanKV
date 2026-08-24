@@ -1,6 +1,6 @@
 # Module 02 — C++ Core Syntax
 
-> Source: [slice.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/slice.h), [status.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/status.h), [coding.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/coding.h), [db.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/db.h)
+> Source: [slice.h](../../../minikv/include/minikv/slice.h), [status.h](../../../minikv/include/minikv/status.h), [coding.h](../../../minikv/src/utils/coding.h), [db.h](../../../minikv/include/minikv/db.h)
 
 ## Background & Motivation
 
@@ -34,11 +34,11 @@ flowchart LR
     L --> E[Executable]
 ```
 
-Every minikv header starts with `#pragma once` (see [slice.h:1](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/slice.h)). Namespaces `namespace minikv { ... }` prevent symbol collisions; utility functions add an inner `namespace utils` (see [coding.h:6-7](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/coding.h)).
+Every minikv header starts with `#pragma once` (see [slice.h:1](../../../minikv/include/minikv/slice.h)). Namespaces `namespace minikv { ... }` prevent symbol collisions; utility functions add an inner `namespace utils` (see [coding.h:6-7](../../../minikv/src/utils/coding.h)).
 
 ### 2.2 Slice — A Lightweight String View
 
-[slice.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/slice.h) implements a LevelDB-style `Slice`:
+[slice.h](../../../minikv/include/minikv/slice.h) implements a LevelDB-style `Slice`:
 
 ```cpp
 class Slice {
@@ -65,7 +65,7 @@ Key points:
 
 ### 2.3 Status — The Error-Handling Idiom
 
-[status.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/status.h) replaces exceptions with `Status`:
+[status.h](../../../minikv/include/minikv/status.h) replaces exceptions with `Status`:
 
 ```cpp
 enum class StatusCode {  // scoped enum, no implicit int conversion
@@ -93,7 +93,7 @@ Key points:
 
 ### 2.4 Varint Variable-Length Encoding
 
-[coding.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/coding.h) implements Protobuf-style varint encoding:
+[coding.h](../../../minikv/src/utils/coding.h) implements Protobuf-style varint encoding:
 
 ```cpp
 inline void encodeVariant32(std::string& dst, uint32_t val) {
@@ -125,7 +125,7 @@ In the project, `Slice::data_` is `const char*` (nullable, re-pointable), while 
 
 **RAII** (Resource Acquisition Is Initialization): bind resources to object lifetimes — acquire in the constructor, release in the destructor; even when an exception unwinds the stack, destructors run.
 
-minikv's `DBImpl` holds `std::unique_ptr<WAL>`, `std::unique_ptr<MemTable>` (see [db_impl.h:39-42](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.h)); when `DBImpl` is destroyed, the member unique_ptrs release automatically — no manual destructor logic needed.
+minikv's `DBImpl` holds `std::unique_ptr<WAL>`, `std::unique_ptr<MemTable>` (see [db_impl.h:39-42](../../../minikv/src/core/db_impl.h)); when `DBImpl` is destroyed, the member unique_ptrs release automatically — no manual destructor logic needed.
 
 **Rule of Five**: if you declare any of destructor / copy ctor / copy assign / move ctor / move assign, you usually need all five. `Status` declares only constructors, not copy/move — the compiler-generated defaults suffice (Rule of Zero).
 
@@ -145,7 +145,7 @@ decltype(x->key) k = x->key;     // deduce the declared type of an expression
 
 ### 2.8 Functions: `inline`, `constexpr`, Default Args, and Overloading
 
-minikv's [coding.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/coding.h) marks `encodeVariant32` as `inline`:
+minikv's [coding.h](../../../minikv/src/utils/coding.h) marks `encodeVariant32` as `inline`:
 
 ```cpp
 inline void encodeVariant32(std::string& dst, uint32_t val) { ... }
@@ -234,7 +234,7 @@ Implement `encodeVariant64` / `decodeVariant64` (64-bit versions). Test: how man
 
 ### Exercise 4.3 (Status in Practice)
 
-Following [status.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/status.h), implement a `Result<T>` template: success carries `T`, failure carries `Status`. Support `map` / `andThen` chaining (like Rust's `Result`).
+Following [status.h](../../../minikv/include/minikv/status.h), implement a `Result<T>` template: success carries `T`, failure carries `Status`. Support `map` / `andThen` chaining (like Rust's `Result`).
 
 ## 5. Self-Check
 

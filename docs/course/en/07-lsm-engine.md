@@ -1,6 +1,6 @@
 # Module 07 — LSM-Tree Engine
 
-> Source: [db_impl.cpp](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.cpp), [wal.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/wal.h), [sstable_builder.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/sstable_builder.h), [memtable.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/memtable.h)
+> Source: [db_impl.cpp](../../../minikv/src/core/db_impl.cpp), [wal.h](../../../minikv/src/core/wal.h), [sstable_builder.h](../../../minikv/src/core/sstable_builder.h), [memtable.h](../../../minikv/src/core/memtable.h)
 
 ## Background & Motivation
 
@@ -88,7 +88,7 @@ flowchart LR
 
 ### 2.2 Write Path Deep Dive
 
-`write` in [db_impl.cpp:88-116](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.cpp):
+`write` in [db_impl.cpp:88-116](../../../minikv/src/core/db_impl.cpp):
 
 ```cpp
 Status DBImpl::write(const WriteOptions& opts, const WriteBatch& batch) {
@@ -118,7 +118,7 @@ Key points:
 
 ### 2.3 WAL Mechanism
 
-[wal.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/wal.h) interface:
+[wal.h](../../../minikv/src/core/wal.h) interface:
 
 ```cpp
 class WAL {
@@ -133,7 +133,7 @@ public:
 
 **WAL principle**: before modifying a data page, append the modification record to the WAL and fsync. After a crash, replay the WAL on restart to rebuild in-memory state.
 
-minikv's `recover()` ([db_impl.cpp:45-74](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.cpp)):
+minikv's `recover()` ([db_impl.cpp:45-74](../../../minikv/src/core/db_impl.cpp)):
 
 1. Open the Manifest and restore the Version (which SSTables exist).
 2. `wal_->replay()` reads all WAL records.
@@ -143,7 +143,7 @@ minikv's `recover()` ([db_impl.cpp:45-74](file:///c:/Users/Administrator/Desktop
 
 ### 2.4 SSTable File Format
 
-The comment in [sstable_builder.h:14-41](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/sstable_builder.h):
+The comment in [sstable_builder.h:14-41](../../../minikv/src/core/sstable_builder.h):
 
 ```
 /-----------------------------\
@@ -173,7 +173,7 @@ Key points:
 
 ### 2.5 MemTable Flush Flow
 
-`maybeFlush` → `flushMemTable` (see [db_impl.h:34](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.h)):
+`maybeFlush` → `flushMemTable` (see [db_impl.h:34](../../../minikv/src/core/db_impl.h)):
 
 1. The current MemTable becomes an Immutable MemTable (read-only).
 2. A new empty MemTable receives subsequent writes.
@@ -185,7 +185,7 @@ L0 SSTables may have **overlapping** keys (multiple flushes); L1+ within a level
 
 ### 2.6 Read Path Deep Dive
 
-[db_impl.cpp:118-120](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.cpp):
+[db_impl.cpp:118-120](../../../minikv/src/core/db_impl.cpp):
 
 ```cpp
 Status DBImpl::get(const ReadOptions& opts, const Slice& key, std::string* value) {
@@ -211,7 +211,7 @@ Key points:
 
 ### 2.7 Block Compression
 
-WP 1.2.1 introduced Snappy/Zstd compression (see [compression.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/compression.h)). Data blocks are compressed before flushing and decompressed on read. The block header stores `physical_size` (on-disk) and `uncompressed_size` (after decompression); the CRC covers the compressed bytes.
+WP 1.2.1 introduced Snappy/Zstd compression (see [compression.h](../../../minikv/src/core/compression.h)). Data blocks are compressed before flushing and decompressed on read. The block header stores `physical_size` (on-disk) and `uncompressed_size` (after decompression); the CRC covers the compressed bytes.
 
 Trade-off: saves disk space + IO, costs CPU. Snappy is fast with low ratio; Zstd is slower with a higher ratio. LSMs typically use Snappy for hot data blocks and Zstd for cold levels.
 
@@ -231,11 +231,11 @@ Write a test: open a DB, Put 1000 keys, **kill the process without `sync()`** (s
 
 ### Exercise 4.2 (SSTable Format Experiment)
 
-Following [sstable_builder.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/sstable_builder.h), hand-write a minimal SSTable: write 3 KVs, manually parse footer → index → data block, verify round trip. Inspect the byte layout with hexdump.
+Following [sstable_builder.h](../../../minikv/src/core/sstable_builder.h), hand-write a minimal SSTable: write 3 KVs, manually parse footer → index → data block, verify round trip. Inspect the byte layout with hexdump.
 
 ### Exercise 4.3 (Read-Path Optimization: Block Cache)
 
-Implement an LRU Block Cache for minikv (following [lru_cache.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/lru_cache.h)): cache recently read data blocks (key = file_path + block_offset); on hit, skip the disk read. Benchmark: random Get over 1M keys (20% hot), compare QPS with/without cache.
+Implement an LRU Block Cache for minikv (following [lru_cache.h](../../../minikv/src/utils/lru_cache.h)): cache recently read data blocks (key = file_path + block_offset); on hit, skip the disk read. Benchmark: random Get over 1M keys (20% hot), compare QPS with/without cache.
 
 ### Exercise 4.4 (Write Amplification Measurement)
 

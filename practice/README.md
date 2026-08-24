@@ -1,8 +1,8 @@
 # TitanKV 课程练习代码（practice）
 
-位于 `/root/practice`（与 hellocpp 同级），按课程 Module 00–14 存放可独立编译运行的练习。
+位于仓库 `practice/`（与 `docs/course/` 配套），按课程 Module 00–14 存放可独立编译运行的练习。
 
-仓库内合并版：`/root/hellocpp/practice`（含 `tests/course` 手撕 `handwrite/`）。本目录仅为 Module 00–14，不含 handwrite。
+仓库内合并版：`../practice`（含 `tests/course` 手撕 `handwrite/`）。本目录仅为 Module 00–14，不含 handwrite。
 
 每章均包含详细中文注释源码与独立 `CMakeLists.txt`，并支持在本章目录下单独生成 `build/`。
 
@@ -80,4 +80,4 @@ chmod +x build_all_modules.sh run_all_modules.sh   # 首次需要
 ## 两处 practice 说明
 
 - `/root/practice`：同级副本，仅 Module 00–14
-- `/root/hellocpp/practice`：仓库内合并版，含 handwrite（手撕题请在 `handwrite/` 目录单独按该目录说明编译；本脚本只处理 `module00`–`module14`）
+- `../practice`：仓库内合并版，含 handwrite（手撕题请在 `handwrite/` 目录单独按该目录说明编译；本脚本只处理 `module00`–`module14`）

@@ -44,22 +44,24 @@ Why put it on your résumé? Because interviewers love to ask "why did you desig
 
 TitanKV 采用分层架构，每一层都可以独立编译、独立替换。请求自上而下穿过客户端、网关、微服务，最终落到 C++ 存储引擎；可观测性组件横切所有层。
 
+交互式分层知识图谱（含各层详细目录结构、竖向调用链、设计分析）：[`docs/layers/index.html`](docs/layers/index.html) · 架构 SVG：[`docs/layers/architecture.svg`](docs/layers/architecture.svg)
+
 ```mermaid
 graph TB
     subgraph Client["客户端层 / Client Layer"]
         WEBUI["Next.js 控制台<br/>web/ (App Router + TanStack Query)"]
-        CLI["CLI 工具<br/>client-cli/ (planned)"]
+        CLI["CLI keyforge<br/>client-cli/"]
         SDK["Go SDK<br/>client-go/titan/"]
     end
 
     subgraph FrontProxy["前置接入 / Front Proxy — C++20 skynet"]
-        SKYGW["skynet_gateway<br/>对外 :8080<br/>半包/线程池/SSE 流式"]
+        SKYGW["skynet_gateway<br/>对外 :8080<br/>epoll ET + 协程主从 Reactor"]
     end
 
     subgraph Gateway["网关层 / Gateway Layer — Go + Gin"]
         GW["API Gateway<br/>cmd/gateway<br/>run-all 时 :18080"]
         MW["中间件链 (洋葱模型)<br/>RequestID → Logger → Recover<br/>→ RateLimit → Auth → RBAC"]
-        PROXY["反向代理<br/>gateway/handler/proxy.go"]
+        PROXY["反向代理<br/>/api/{auth,data,meta,observability,rag}"]
     end
 
     subgraph Services["微服务层 / Services Layer — Go"]
@@ -67,34 +69,36 @@ graph TB
         DATA["Data 服务<br/>services/data/<br/>KV 读写 :8081"]
         META["Meta 服务<br/>services/meta/<br/>Schema / 元数据 :8083"]
         OBS["Observability 服务<br/>services/observability/<br/>Metrics / Trace :8084"]
+        RAG["RAG 服务<br/>services/rag/<br/>ingest / retrieve / chat :8085"]
     end
 
     subgraph Storage["存储引擎层 / Storage Engine — C++17"]
         MINIKV["minikv LSM-Tree<br/>minikv/src/core/"]
         WAL["WAL<br/>wal.cpp"]
-        MEM["MemTable<br/>memtable.cpp + skip_list.h"]
-        SST["SSTable<br/>sstable_builder / reader"]
+        MEM["MemTable shared_ptr<br/>锁外 Get/Iterator"]
+        SST["SSTable + BlockCache<br/>解压块 LRU"]
         COMP["Compaction<br/>compaction.cpp"]
-        MANIFEST["Manifest + Version<br/>manifest.cpp / version.cpp"]
-        BLOOM["BloomFilter<br/>bloom_filter.h"]
-        MVCC["MVCC<br/>internal_key.cpp"]
+        MANIFEST["Manifest + Version"]
+        BLOOM["BloomFilter"]
+        MVCC["MVCC InternalKey"]
+        NET["主从 Reactor 网络<br/>epoll LT · io/biz threads"]
     end
 
     subgraph NetLib["网络库 / Network Library — C++20"]
-        SKYNET["skynet 库 + skynet_gateway<br/>库: skynet/src/<br/>前置: gateway/ (run-all)"]
-        IO["epoll / io_context<br/>net/"]
+        SKYNET["skynet 库 + skynet_gateway"]
+        IO["epoll ET / io_awaitable<br/>net/"]
         HTTP["HTTP 解析 + Router<br/>http/"]
         LB["负载均衡 + 连接池<br/>proxy/"]
     end
 
-    subgraph Dist["分布式层 / Distributed (planned)"]
-        RAFT["Raft 共识<br/>hashicorp/raft"]
-        SHARD["一致性哈希分片<br/>distributed/"]
-        ETCD["etcd 服务发现"]
+    subgraph Dist["分布式层 / Distributed (教学实验)"]
+        RAFT["hashicorp/raft<br/>1-node / JoinCluster"]
+        SHARD["分片/一致性哈希<br/>gateway/shard.go"]
+        CLUSTER["distributed/cluster.go"]
     end
 
     subgraph ObsStack["可观测性栈 / Observability Stack"]
-        PROM["Prometheus<br/>deploy/dev/prometheus.yml"]
+        PROM["Prometheus"]
         GRAF["Grafana"]
         JAEGER["Jaeger"]
         REDIS[("Redis<br/>限流 + jti 黑名单")]
@@ -109,7 +113,9 @@ graph TB
     PROXY --> DATA
     PROXY --> META
     PROXY --> OBS
-    DATA -->|Phase 2: gRPC / cgo| MINIKV
+    PROXY --> RAG
+    DATA -->|TCP MINIKV_ADDR| MINIKV
+    RAG -->|TCP MiniKVClient| MINIKV
     MINIKV --- WAL
     MINIKV --- MEM
     MINIKV --- SST
@@ -117,12 +123,13 @@ graph TB
     MINIKV --- MANIFEST
     MINIKV --- BLOOM
     MINIKV --- MVCC
+    MINIKV --- NET
     SKYNET --- IO
     SKYNET --- HTTP
     SKYNET --- LB
-    GW -.->|Phase 5| RAFT
-    RAFT --- SHARD
-    SHARD --- ETCD
+    GW -.->|教学| RAFT
+    RAFT --- CLUSTER
+    CLUSTER --- SHARD
     AUTH --> REDIS
     GW --> REDIS
     OBS --> PROM
@@ -133,12 +140,12 @@ graph TB
 | 层 / Layer | 职责 / Responsibility | 关键代码 / Key Code |
 |---|---|---|
 | 客户端 / Client | 控制台、CLI、SDK 接入 | `web/`, `client-cli/`, `client-go/titan/` |
-| 前置接入 / Front Proxy | skynet 对外 :8080 → Gin :18080（`make run-all`） | `skynet/gateway/` |
-| 网关 / Gateway | 鉴权、限流、RBAC、反向代理 | `gateway/` |
-| 微服务 / Services | Auth / Data / Meta / Observability | `services/{auth,data,meta,observability}/` |
-| 存储引擎 / Storage Engine | LSM-Tree：WAL/MemTable/SST/Compaction/MVCC | `minikv/src/core/` |
-| 网络库 / Network Library | C++20 协程、epoll、HTTP、负载均衡 | `skynet/src/` |
-| 分布式 / Distributed | Raft 复制、一致性哈希分片 | `distributed/` (planned) |
+| 前置接入 / Front Proxy | skynet 对外 :8080（ET+协程）→ Gin :18080（`make run-all`） | `skynet/gateway/` |
+| 网关 / Gateway | 鉴权、限流、RBAC、反向代理（含 `/api/rag`） | `gateway/` |
+| 微服务 / Services | Auth / Data / Meta / Observability / RAG | `services/{auth,data,meta,observability,rag}/` |
+| 存储引擎 / Storage Engine | LSM：WAL/MemTable(`shared_ptr`)/SST/BlockCache/Compaction/MVCC | `minikv/src/core/` |
+| 网络库 / Network Library | C++20 协程、epoll ET、HTTP、负载均衡 | `skynet/src/` |
+| 分布式 / Distributed | Raft 教学实验、分片辅助 | `distributed/`、`cmd/raft`、`gateway/shard.go` |
 | 可观测性 / Observability | Metrics、Trace、可视化 | `services/observability/`, `deploy/dev/` |
 
 ---
@@ -148,8 +155,8 @@ graph TB
 ```
 titan-kv/
 ├── minikv/              # C++17 LSM-Tree 存储引擎 / C++17 LSM-Tree storage engine
-│   ├── src/core/        #   WAL / MemTable / SSTable / Compaction / MVCC
-│   ├── src/network/     #   原生网络层（epoll 主从 Reactor + connection）
+│   ├── src/core/        #   WAL / MemTable(shared_ptr) / SST / BlockCache / Compaction / MVCC
+│   ├── src/network/     #   主从 Reactor（epoll LT + io/biz 线程池）
 │   ├── src/utils/       #   coding / crc32 / hash / lru_cache / thread_pool
 │   ├── tests/           #   GoogleTest 单元测试
 │   └── benches/        #   Google Benchmark 基准
@@ -158,22 +165,23 @@ titan-kv/
 │   ├── src/core/       #   executor / task / thread_pool / timer_wheel
 │   ├── src/http/       #   parser / router / headers / response
 │   ├── src/proxy/      #   load_balancer / connection_pool / health_check / upstream
-│   └── gateway/        #   skynet 网关示例（gateway.yaml）
+│   └── gateway/        #   前置反代（ET + 协程主从 Reactor → Gin）
 ├── gateway/            # Go API 网关 (Gin) / Go API gateway (Gin)
 │   ├── handler/        #   ping / proxy
 │   └── middleware/     #   RequestID / Logger / Recover / RateLimit / Auth / RBAC
 ├── services/           # Go 微服务 / Go microservices
 │   ├── auth/           #   JWT / RBAC / APIKey / bcrypt
-│   ├── data/           #   KV 读写服务 / KV data service (planned wiring)
+│   ├── data/           #   KV 读写（MINIKV_ADDR → minikv_server）
 │   ├── meta/          #   Schema / 元数据 / metadata
-│   └── observability/  #   metrics / trace 聚合
+│   ├── observability/  #   metrics / trace 聚合
+│   └── rag/            #   RAG ingest / retrieve / chat (:8085)
 ├── client-go/titan/     # Go SDK / Go SDK
-├── client-cli/         # (planned) Cobra CLI 工具 / planned Cobra CLI
+├── client-cli/         # Cobra CLI `keyforge`（put/get/scan/ping）
 ├── web/                # Next.js 14 管理控制台 / Next.js 14 admin console
 │   ├── app/           #   App Router (dashboard / login)
 │   ├── components/    #   live-metrics / metrics-card / nav / providers
 │   └── lib/           #   api.ts / types.ts
-├── distributed/        # (planned) Raft + 分片 / planned Raft + sharding
+├── distributed/        # Raft 教学模块（1-node / JoinCluster）
 ├── proto/              # (planned) gRPC / protobuf 定义 / planned gRPC/protobuf
 ├── deploy/             # 部署配置 / deployment config
 │   ├── dev/           #   docker-compose.yml + prometheus.yml
@@ -182,7 +190,9 @@ titan-kv/
 ├── docs/               # 文档 / documentation
 │   ├── course/{zh,en}/ #   13 模块中英双语课程 / 13-module bilingual course
 │   ├── REFACTORING.md #   重构计划 / refactoring plan
-│   └── STORAGE_ENGINE.md
+│   ├── STORAGE_ENGINE.md
+│   ├── RAG-ARCHITECTURE.md
+│   └── *.png            #   架构示意 PNG
 ├── tests/course/       # 课程配套手撕题测试 (7 文件 / 37 用例)
 ├── CMakeLists.txt      # 顶层 CMake 聚合 / top-level CMake
 ├── go.mod              # Go module 根 / Go module root
@@ -204,14 +214,15 @@ titan-kv/
 | Phase 2 | C++ 引擎接入 Go Data（TCP 协议 / 规划中的 gRPC） | ✅ **MVP done** — `MINIKV_ADDR` → `minikv_server` 原生 TCP；gRPC/cgo 仍为后续增强 |
 | Phase 3 | Go API 网关 + Auth 服务（JWT/RBAC/APIKey） / Go gateway + auth | ✅ **MVP done** — `gateway/` + `services/auth/` |
 | Phase 4 | Go data / meta / observability 服务 / Go data/meta/observability | ✅ **MVP done** — Data 默认可接 minikv；无 `MINIKV_ADDR` 时回退内存 |
-| Phase 5 | 分布式层：hashicorp/raft（教学 1-node）+ 分片规划 | ✅ **1-node Raft done** — `distributed/`；多节点/分片仍为规划 |
-| Phase 6 | Next.js 管理控制台 / Next.js admin console | ✅ **MVP done** — `web/` (App Router + TanStack Query) |
-| Phase 7 | 可观测性 + Kubernetes + CI/CD / Observability + K8s + CI/CD | ⏳ planned |
-| Phase 8 | CLI 工具 + 多语言 SDK + 文档 / CLI + SDK + docs | ⏳ planned |
+| Phase 5 | 分布式层：hashicorp/raft（教学）+ 分片辅助 | ✅ **教学 MVP** — `distributed/` + `cmd/raft`；多机生产集群仍为规划 |
+| Phase 6 | Next.js 管理控制台（含 RAG / Cluster 页） | ✅ **MVP done** — `web/` |
+| Phase 6.5 | RAG 检索服务（side index + HNSW + SSE chat） | ✅ **MVP done** — `services/rag/` :8085 |
+| Phase 7 | 可观测性 + Kubernetes + CI/CD | ⏳ planned |
+| Phase 8 | CLI + 多语言 SDK + 文档 | ✅ **CLI MVP** — `client-cli/`；多语言 SDK 仍为规划 |
 
-> **MVP 说明 / MVP note**：`make run-all` 对外 **:8080 = skynet_gateway 前置** → Gin `:18080` → Data/Auth…；会启动 `minikv_server`，Data 经 `MINIKV_ADDR` 持久化到 LSM。skynet 不做 JWT/限流。Observability 仍有 mock 指标。Raft 为教学用单节点，不是多机生产集群。
+> **MVP 说明 / MVP note**：`make run-all` 对外 **:8080 = skynet_gateway**（epoll ET + C++20 协程）→ Gin `:18080` → Auth/Data/Meta/Observ/**RAG**；启动 `minikv_server`，Data/RAG 经 `MINIKV_ADDR` 落 LSM。skynet 不做 JWT/限流。Raft 为教学实验，不是多机生产集群。
 >
-> `make run-all` exposes **:8080 = skynet front proxy** → Gin `:18080` → services; starts `minikv_server`; Data persists via `MINIKV_ADDR`. skynet does not do JWT/rate-limit. Observability metrics may still be mocked. Raft is a teaching 1-node group, not a multi-host cluster.
+> `make run-all` exposes **:8080 = skynet (ET + coroutines)** → Gin `:18080` → Auth/Data/Meta/Observ/RAG; starts `minikv_server`; Data/RAG persist via `MINIKV_ADDR`. skynet does not do JWT/rate-limit. Raft is a teaching experiment, not a multi-host production cluster.
 
 ---
 
@@ -228,7 +239,7 @@ git clone https://github.com/Thezx-a/TitanKV.git
 cd TitanKV
 
 # 详细步骤见 RUN.md（推荐 WSL Ubuntu 22.04）
-# 1. 启动 5 个 Go 服务（auth/data/meta/observability/gateway）
+# 1. 启动 minikv + Go（含 RAG）+ skynet 前置
 make run-all
 
 # 2. （新终端）启动 Web 控制台
@@ -251,7 +262,7 @@ git clone https://github.com/Thezx-a/TitanKV.git
 cd TitanKV
 
 # Full WSL guide: RUN.md
-# 1. Start the 5 Go services (auth/data/meta/observability/gateway)
+# 1. Start minikv + Go services (incl. RAG) + skynet front proxy
 make run-all
 
 # 2. (new terminal) Start the web console
@@ -379,7 +390,7 @@ curl -s http://localhost:8080/api/data/kv/foo \
 | 08 | Compaction 与 MVCC / Compaction & MVCC | 存储引擎 / Storage | `minikv/src/core/{compaction,internal_key}` |
 | 09 | epoll 与 C++20 协程 / epoll & C++20 Coroutines | 网络 / Network | `skynet/src/{net,core}` |
 | 10 | HTTP 与反向代理 / HTTP & Reverse Proxy | 网络 / Network | `skynet/src/{http,proxy}` |
-| 11 | Raft 共识与分片 / Raft & Sharding | 分布式 / Distributed | `distributed/` (planned) |
+| 11 | Raft 共识与分片 / Raft & Sharding | 分布式 / Distributed | `distributed/` / `cmd/raft` |
 | 12 | Go 微服务与 Next.js 控制台 / Go µServices & Next.js | 应用 / Application | `services/` / `web/` |
 | 13 | 系统设计与面试题汇总 / System Design & Interview Q&A | 面试 / Interview | 全项目 / Whole project |
 
@@ -409,7 +420,8 @@ curl -s http://localhost:8080/api/data/kv/foo \
 | `make run-data` | Data 服务 :8081 / data service |
 | `make run-meta` | Meta 服务 :8083 / meta service |
 | `make run-observ` | Observability 服务 :8084 / observability service |
-| `make run-all` | minikv + Go + skynet 前置（对外 :8080） |
+| `make run-rag` | RAG 服务 :8085 / RAG service |
+| `make run-all` | minikv + Go（含 RAG）+ skynet 前置（对外 :8080） |
 | `make web-install` / `make web-dev` / `make web-build` | Next.js 安装 / 开发 / 构建 |
 | `make docker-up` / `make docker-down` | 本地开发栈 (Postgres/Redis/etcd/Jaeger/Prometheus/Grafana) |
 | `make clean` | 清理构建产物 / clean build artifacts |
@@ -462,10 +474,11 @@ Bring it up locally with `make docker-up` (driven by [`deploy/dev/docker-compose
 | 2 | gRPC server 接 minikv + Go cgo 客户端 / gRPC server wrapping minikv | ⏳ planned |
 | 3 | Go 网关 + Auth（JWT/RBAC/APIKey） / Go gateway + auth | ✅ MVP done |
 | 4 | Go data/meta/observability 服务 / Go services | ✅ MVP done |
-| 5 | Raft 复制 + 一致性哈希分片 + etcd / Raft + sharding + etcd | ⏳ planned |
-| 6 | Next.js 管理控制台 / Next.js console | ✅ MVP done |
+| 5 | Raft 教学实验 + 分片辅助（多机生产仍规划） | ✅ teaching MVP |
+| 6 | Next.js 管理控制台（含 RAG/Cluster） | ✅ MVP done |
+| 6.5 | RAG 服务（HNSW side index + SSE） | ✅ MVP done |
 | 7 | K8s 部署 + Prometheus/Grafana/Jaeger + CI/CD | ⏳ planned |
-| 8 | Cobra CLI + 多语言 SDK + 文档完善 / CLI + SDK + docs | ⏳ planned |
+| 8 | Cobra CLI MVP + 多语言 SDK + 文档 | ✅ CLI MVP / SDK planned |
 
 ---
 

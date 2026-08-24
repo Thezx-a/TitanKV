@@ -1,6 +1,6 @@
 # Module 00 — 跨平台环境搭建
 
-> 对应源码：顶层 [CMakeLists.txt](file:///c:/Users/Administrator/Desktop/hellocpp/CMakeLists.txt)、[Makefile](file:///c:/Users/Administrator/Desktop/hellocpp/Makefile)、[go.mod](file:///c:/Users/Administrator/Desktop/hellocpp/go.mod)、[web/package.json](file:///c:/Users/Administrator/Desktop/hellocpp/web/package.json)、[deploy/dev/docker-compose.yml](file:///c:/Users/Administrator/Desktop/hellocpp/deploy/dev/docker-compose.yml)
+> 对应源码：顶层 [CMakeLists.txt](../../../CMakeLists.txt)、[Makefile](../../../Makefile)、[go.mod](../../../go.mod)、[web/package.json](../../../web/package.json)、[deploy/dev/docker-compose.yml](../../../deploy/dev/docker-compose.yml)
 
 ## 1. 为什么要先搭环境
 
@@ -147,7 +147,7 @@ WSL2 装好后，我们要在 Windows 上的 VSCode 里直接打开 WSL2 内的�
 
 ```bash
 # 在 WSL2 终端中执行
-cd /mnt/c/Users/Administrator/Desktop/hellocpp
+cd /mnt/d/SpectrumCore
 code .
 ```
 
@@ -161,8 +161,8 @@ code .
 
 ```bash
 # 在 WSL2 中，把 Windows 项目目录软链到 home
-ln -s /mnt/c/Users/Administrator/Desktop/hellocpp ~/hellocpp
-cd ~/hellocpp
+ln -s /mnt/d/SpectrumCore ~/titan-kv
+cd ~/titan-kv
 ```
 
 这样 `git` 操作和 `cmake` 构建会快很多。
@@ -1693,7 +1693,7 @@ CLion 的优势：
 - 用 `go build` 编译 `gateway` 和 `services`，启动 Go 微服务；
 - 用 `npm run dev` 启动 Next.js 控制台；
 - 用 `docker compose up` 起本地依赖栈；
-- 通读 [README.md](file:///c:/Users/Administrator/Desktop/hellocpp/README.md) 和 [docs/REFACTORING.md](file:///c:/Users/Administrator/Desktop/hellocpp/docs/REFACTORING.md)，理解 TitanKV 的 9 个 Phase 重构路线。
+- 通读 [README.md](../../../README.md) 和 [docs/REFACTORING.md](../../../docs/REFACTORING.md)，理解 TitanKV 的 9 个 Phase 重构路线。
 
 记住：**环境验证脚本全绿是进入 Module 01 的入场券**。如果还有红色 `[✗]`，回到对应章节修好再继续。
 

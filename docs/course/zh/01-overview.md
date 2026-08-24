@@ -1,6 +1,6 @@
 # Module 01 — 环境搭建与项目概览
 
-> 对应源码：顶层 [CMakeLists.txt](file:///c:/Users/Administrator/Desktop/hellocpp/CMakeLists.txt)、[Makefile](file:///c:/Users/Administrator/Desktop/hellocpp/Makefile)、[README.md](file:///c:/Users/Administrator/Desktop/hellocpp/README.md)、[docs/REFACTORING.md](file:///c:/Users/Administrator/Desktop/hellocpp/docs/REFACTORING.md)
+> 对应源码：顶层 [CMakeLists.txt](../../../CMakeLists.txt)、[Makefile](../../../Makefile)、[README.md](../../../README.md)、[docs/REFACTORING.md](../../../docs/REFACTORING.md)
 
 ## 背景与动机
 
@@ -60,7 +60,7 @@ flowchart TB
 
 ### 2.2 构建系统拆解
 
-顶层 [CMakeLists.txt](file:///c:/Users/Administrator/Desktop/hellocpp/CMakeLists.txt) 设定 `CMAKE_CXX_STANDARD 17`，并通过 `add_subdirectory` 聚合 `minikv`：
+顶层 [CMakeLists.txt](../../../CMakeLists.txt) 设定 `CMAKE_CXX_STANDARD 17`，并通过 `add_subdirectory` 聚合 `minikv`：
 
 ```cmake
 set(CMAKE_CXX_STANDARD 17)
@@ -70,7 +70,7 @@ option(ENABLE_SANITIZERS "Enable Address/Thread sanitizers" OFF)
 add_subdirectory(minikv)
 ```
 
-`minikv/CMakeLists.txt` 把核心编译为静态库 `minikv`，并通过 `FetchContent` 拉取 Snappy + Zstd 做块压缩（见 [cmake/FetchCompression.cmake](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/cmake/FetchCompression.cmake)）。
+`minikv/CMakeLists.txt` 把核心编译为静态库 `minikv`，并通过 `FetchContent` 拉取 Snappy + Zstd 做块压缩（见 [cmake/FetchCompression.cmake](../../../minikv/cmake/FetchCompression.cmake)）。
 
 `skynet` 需要 C++20 协程支持，单独构建（顶层 CMake 不强制 C++20，避免拖累 minikv）：
 
@@ -81,7 +81,7 @@ cmake --build skynet/build -j
 
 ### 2.3 统一 Makefile 入口
 
-[Makefile](file:///c:/Users/Administrator/Desktop/hellocpp/Makefile) 提供跨语言统一入口，关键目标：
+[Makefile](../../../Makefile) 提供跨语言统一入口，关键目标：
 
 | 目标 | 作用 |
 |---|---|
@@ -95,7 +95,7 @@ cmake --build skynet/build -j
 
 ### 2.4 本地开发栈
 
-[deploy/dev/docker-compose.yml](file:///c:/Users/Administrator/Desktop/hellocpp/deploy/dev/docker-compose.yml) 起本地依赖：
+[deploy/dev/docker-compose.yml](../../../deploy/dev/docker-compose.yml) 起本地依赖：
 
 - **PostgreSQL** — 元数据存储（Collection、User、APIKey）
 - **Redis** — 限流、缓存、分布式锁
@@ -135,11 +135,11 @@ ctest --test-dir build --output-on-failure
 
 ### 题 4.2（架构梳理）
 
-阅读 [README.md](file:///c:/Users/Administrator/Desktop/hellocpp/README.md) 的 Repository Layout 与 [docs/REFACTORING.md](file:///c:/Users/Administrator/Desktop/hellocpp/docs/REFACTORING.md)，用一张表总结：每个目录对应哪个 Phase、当前状态、负责什么职责。
+阅读 [README.md](../../../README.md) 的 Repository Layout 与 [docs/REFACTORING.md](../../../docs/REFACTORING.md)，用一张表总结：每个目录对应哪个 Phase、当前状态、负责什么职责。
 
 ### 题 4.3（写路径追踪）
 
-阅读 [minikv/src/core/db_impl.cpp](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.cpp) 的 `put()` 与 `flushMemTable()`，画出 `Put(key,value)` 从调用到落盘 SSTable 的完整调用链（函数名级）。
+阅读 [minikv/src/core/db_impl.cpp](../../../minikv/src/core/db_impl.cpp) 的 `put()` 与 `flushMemTable()`，画出 `Put(key,value)` 从调用到落盘 SSTable 的完整调用链（函数名级）。
 
 ## 5. 自检
 
@@ -170,3 +170,9 @@ ctest --test-dir build --output-on-failure
 ---
 
 ← [课程大纲](./README.md)  |  下一模块：[Module 02 — C++ 核心语法](./02-cpp-core.md) →
+
+## 最新增量（相对初版课程）
+
+- `make run-all` 含 **RAG :8085**、skynet 前置为 **epoll ET + C++20 协程**。
+- minikv：MemTable `shared_ptr` 锁外读、SST **BlockCache**、网络层主从 Reactor（LT）。
+- `distributed/` + `cmd/raft` 为 Raft 教学实验；详情见 [`docs/RAG-ARCHITECTURE.md`](../../RAG-ARCHITECTURE.md) 与根 README。

@@ -331,13 +331,13 @@ flowchart TD
 - 不会隐式转 int，避免 `if (color == 1)` 这种坑。
 - 不会污染外层命名空间。
 - 可前向声明。
-- minikv [status.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/status.h) 用 `enum class StatusCode`，[parser.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/http/parser.h) 用 `enum class State`、`enum class ParseResult`。
+- minikv [status.h](../../../minikv/include/minikv/status.h) 用 `enum class StatusCode`，[parser.h](../../../skynet/include/skynet/http/parser.h) 用 `enum class State`、`enum class ParseResult`。
 
 **Q10.** `[[nodiscard]]` / `[[fallthrough]]` / `[[maybe_unused]]` 三个属性的作用与场景？
 
 **A10.**
 - `[[nodiscard]]`：返回值不可丢弃。`[[nodiscard]] Status Open(...);` 提醒调用者检查错误。
-- `[[fallthrough]]`：switch 显式贯穿。minikv [hash.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/hash.h) MurmurHash2 中 size 分支显式 fallthrough。
+- `[[fallthrough]]`：switch 显式贯穿。minikv [hash.h](../../../minikv/src/utils/hash.h) MurmurHash2 中 size 分支显式 fallthrough。
 - `[[maybe_unused]]`：抑制未使用警告，常用于条件编译变量。
 
 ---
@@ -375,7 +375,7 @@ flowchart TD
 **A14.**
 - cv 不带数据，必须用锁保护共享状态（队列/标志），谓词判断条件是否满足。
 - 虚假唤醒：`wait` 可能在没有 notify 时返回（OS 实现允许），所以必须用谓词 `wait(lock, pred)` 循环判断。
-- minikv [thread_pool.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/thread_pool.h) 用 `cv_.wait(lock, [this]{ return !queue_.empty() || stop_; })`。
+- minikv [thread_pool.h](../../../minikv/src/utils/thread_pool.h) 用 `cv_.wait(lock, [this]{ return !queue_.empty() || stop_; })`。
 
 **Q15.** 线程池核心要素？minikv ThreadPool 怎么停机？
 
@@ -404,7 +404,7 @@ flowchart TD
 
 **Q18.** TLS（thread_local）的作用？minikv 在哪用？
 
-**A18.** `thread_local` 每个线程独立副本，无锁访问。minikv [skip_list.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h) 用 `thread_local std::mt19937` 做 RNG，避免每个 SkipList 实例都持一个生成器，也避免锁竞争。
+**A18.** `thread_local` 每个线程独立副本，无锁访问。minikv [skip_list.h](../../../minikv/src/core/skip_list.h) 用 `thread_local std::mt19937` 做 RNG，避免每个 SkipList 实例都持一个生成器，也避免锁竞争。
 
 ---
 
@@ -428,7 +428,7 @@ flowchart TD
 
 **Q21.** 对称转移（Symmetric Transfer）解决什么问题？
 
-**A21.** 嵌套 `co_await` 会栈式累积协程帧，深层递归会爆栈。对称转移通过 `await_suspend` 返回 `coroutine_handle` 而非 `void/bool`，让被挂起的协程直接「跳转」到下一个协程，而非返回到调用链上层，保持栈深度 O(1)。skynet [task.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/core/task.h) 的 `final_awaiter::await_suspend` 即用对称转移。
+**A21.** 嵌套 `co_await` 会栈式累积协程帧，深层递归会爆栈。对称转移通过 `await_suspend` 返回 `coroutine_handle` 而非 `void/bool`，让被挂起的协程直接「跳转」到下一个协程，而非返回到调用链上层，保持栈深度 O(1)。skynet [task.h](../../../skynet/include/skynet/core/task.h) 的 `final_awaiter::await_suspend` 即用对称转移。
 
 **Q22.** 无栈协程 vs 有栈协程？
 
@@ -444,7 +444,7 @@ flowchart TD
 
 **Q23.** Executor 是什么？为什么需要？
 
-**A23.** 协程恢复需要调度器决定「在哪个线程恢复」。`std::suspend_always` 不指定恢复线程，由谁调 `resume()` 决定。Executor 抽象调度策略（同线程 / 线程池 / IO 线程）。skynet [executor.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/core/executor.h) 即协程调度器，把可恢复协程投递到线程池。
+**A23.** 协程恢复需要调度器决定「在哪个线程恢复」。`std::suspend_always` 不指定恢复线程，由谁调 `resume()` 决定。Executor 抽象调度策略（同线程 / 线程池 / IO 线程）。skynet [executor.h](../../../skynet/include/skynet/core/executor.h) 即协程调度器，把可恢复协程投递到线程池。
 
 ---
 
@@ -458,7 +458,7 @@ flowchart TD
 - 查找：从最高层往右走，遇到比 target 大就下降。
 - 插入：随机层数（`p=0.5`，`max=16`），记录每层插入位置的前驱，更新 forward。
 - 删除：同查找，更新前驱 forward。
-- minikv [skip_list.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h) 是工程版（带 InternalKey 比较、shared_mutex、thread_local RNG），可作为参考实现。
+- minikv [skip_list.h](../../../minikv/src/core/skip_list.h) 是工程版（带 InternalKey 比较、shared_mutex、thread_local RNG），可作为参考实现。
 
 骨架（LeetCode 风格）：
 
@@ -513,7 +513,7 @@ public:
 
 **Q25.** **LeetCode 146** LRU Cache。`get` / `put` O(1)。
 
-**A25.** 哈希表 + 双向链表。哈希表 O(1) 查节点，双向链表 O(1) 移到头部 / 删尾部。minikv [lru_cache.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/lru_cache.h) 用 `unordered_map + list` 组合，本质相同。
+**A25.** 哈希表 + 双向链表。哈希表 O(1) 查节点，双向链表 O(1) 移到头部 / 删尾部。minikv [lru_cache.h](../../../minikv/src/utils/lru_cache.h) 用 `unordered_map + list` 组合，本质相同。
 
 ```cpp
 class LRUCache {
@@ -563,7 +563,7 @@ LSM-Tree 选 SkipList 做 MemTable：实现简单、范围扫描友好、并发�
 
 **Q29.** 一致性哈希为什么需要虚拟节点？
 
-**A29.** 节点少时数据倾斜严重（如 3 节点，哈希环上分布不均，某节点可能拿 60% key）。虚拟节点：每物理节点对应 150-200 个虚拟节点，哈希环上分布更均匀。skynet [load_balancer.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/proxy/load_balancer.h) `ConsistentHashLB(vnodes=160)`。
+**A29.** 节点少时数据倾斜严重（如 3 节点，哈希环上分布不均，某节点可能拿 60% key）。虚拟节点：每物理节点对应 150-200 个虚拟节点，哈希环上分布更均匀。skynet [load_balancer.h](../../../skynet/include/skynet/proxy/load_balancer.h) `ConsistentHashLB(vnodes=160)`。
 
 **Q30.** MurmurHash2 vs SHA1/CRC32？为什么 LSM-Tree 内部用 MurmurHash2？
 
@@ -594,7 +594,7 @@ LSM-Tree 选 SkipList 做 MemTable：实现简单、范围扫描友好、并发�
 
 **Q34.** SSTable 文件格式为什么这样设计？minikv 的格式是什么？
 
-**A34.** 设计目标：单次顺序读、点查 O(log)、范围扫描友好、支持索引与布隆。minikv [sstable_builder.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/sstable_builder.h) 格式：
+**A34.** 设计目标：单次顺序读、点查 O(log)、范围扫描友好、支持索引与布隆。minikv [sstable_builder.h](../../../minikv/src/core/sstable_builder.h) 格式：
 ```
 [DataBlock1][DataBlock2]...[DataBlockN]
 [IndexBlock]
@@ -623,7 +623,7 @@ DataBlock：`[crc(4)][physical_size(4)][uncompressed_size(4)][type(1)][payload]`
 
 **A36.**
 - MVCC：每条数据带版本号（seq），读时只看 ≤ snapshot_seq 的最新版本。
-- minikv [internal_key.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/internal_key.h) 编码：`[user_key | trailer(8)]`，trailer = `(seq << 8) | type`。
+- minikv [internal_key.h](../../../minikv/src/core/internal_key.h) 编码：`[user_key | trailer(8)]`，trailer = `(seq << 8) | type`。
 - 排序：user_key 升序，相同 user_key 下 seq 降序（新版本在前）。
 - 读取：扫描到匹配 user_key 的第一行即最新版本。
 
@@ -686,7 +686,7 @@ epoll 用红黑树存所有 fd，就绪 fd 进入就绪链表，`epoll_wait` 只
 - LT：只要 fd 有数据可读就一直触发，每次 `epoll_wait` 都返回。简单。
 - ET：fd 状态变化时触发一次，必须一次读完所有数据（循环 read 到 EAGAIN）。高效（减少 epoll_wait 调用次数），但易漏数据。
 - ET 必须配合非阻塞 fd + 循环读，否则部分数据未读 + 下次不再触发 → 死锁。
-- skynet [io_context.cpp](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/src/net/io_context.cpp) 注册时带 **`EPOLLET`（边缘触发）**，必须非阻塞 + 读到 `EAGAIN`；教学叙述里若写 LT 以源码为准。
+- skynet [io_context.cpp](../../../skynet/src/net/io_context.cpp) 注册时带 **`EPOLLET`（边缘触发）**，必须非阻塞 + 读到 `EAGAIN`；教学叙述里若写 LT 以源码为准。
 
 **Q44.** Reactor 模式？为什么 main reactor + sub reactor？
 
@@ -734,7 +734,7 @@ HTTP/3 用 QUIC（UDP 上的可靠传输）解决 TCP 队头阻塞，0-RTT 建�
 
 **Q49.** skynet HTTP parser 状态机的状态有哪些？为什么用状态机？
 
-**A49.** 状态：`kMethod → kPath → kVersion → kHeaderName → kHeaderValue → kBody → kDone`（见 [parser.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/http/parser.h)）。状态机优势：
+**A49.** 状态：`kMethod → kPath → kVersion → kHeaderName → kHeaderValue → kBody → kDone`（见 [parser.h](../../../skynet/include/skynet/http/parser.h)）。状态机优势：
 - 流式处理：feed 多次调用，适合 epoll 增量读。
 - 边界处理：每字节根据状态走分支，无需先缓存整个请求。
 - 错误定位：解析失败能指出在哪个状态出错。
@@ -984,15 +984,15 @@ public:
 
 | 面试主题 | TitanKV 模块 | 关键源码 | 课程模块 |
 |---|---|---|---|
-| C++ 基础 | Slice / Status / Varint | [slice.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/slice.h)、[status.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/status.h)、[coding.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/coding.h) | M02 |
-| C++ 并发 | SkipList / ThreadPool / LRUCache | [skip_list.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h)、[thread_pool.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/thread_pool.h)、[lru_cache.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/lru_cache.h) | M03 |
+| C++ 基础 | Slice / Status / Varint | [slice.h](../../../minikv/include/minikv/slice.h)、[status.h](../../../minikv/include/minikv/status.h)、[coding.h](../../../minikv/src/utils/coding.h) | M02 |
+| C++ 并发 | SkipList / ThreadPool / LRUCache | [skip_list.h](../../../minikv/src/core/skip_list.h)、[thread_pool.h](../../../minikv/src/utils/thread_pool.h)、[lru_cache.h](../../../minikv/src/utils/lru_cache.h) | M03 |
 | Go / TS | gateway / web | MVP 已通；Data 仍为内存 map | M04 / M12 |
-| 跳表 | MemTable | [skip_list.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h) | M05 |
-| Bloom / Hash | BloomFilter / MurmurHash | [bloom_filter.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/bloom_filter.h)、[hash.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/hash.h) | M06 |
-| LSM-Tree | DBImpl / SSTable | [db_impl.cpp](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.cpp)、[sstable_builder.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/sstable_builder.h) | M07 |
-| Compaction / MVCC | CompactionManager / InternalKey | [compaction.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/compaction.h)（合并主体偏 stub）、[internal_key.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/internal_key.h) | M08 |
-| epoll / 协程 | IOContext / Task | [io_context.cpp](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/src/net/io_context.cpp)（**ET**）、[task.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/core/task.h) | M09 |
-| HTTP / 代理 | HttpParser / LoadBalancer | [parser.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/http/parser.h)、[load_balancer.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/proxy/load_balancer.h) | M10 |
+| 跳表 | MemTable | [skip_list.h](../../../minikv/src/core/skip_list.h) | M05 |
+| Bloom / Hash | BloomFilter / MurmurHash | [bloom_filter.h](../../../minikv/src/core/bloom_filter.h)、[hash.h](../../../minikv/src/utils/hash.h) | M06 |
+| LSM-Tree | DBImpl / SSTable | [db_impl.cpp](../../../minikv/src/core/db_impl.cpp)、[sstable_builder.h](../../../minikv/src/core/sstable_builder.h) | M07 |
+| Compaction / MVCC | CompactionManager / InternalKey | [compaction.h](../../../minikv/src/core/compaction.h)（合并主体偏 stub）、[internal_key.h](../../../minikv/src/core/internal_key.h) | M08 |
+| epoll / 协程 | IOContext / Task | [io_context.cpp](../../../skynet/src/net/io_context.cpp)（**ET**）、[task.h](../../../skynet/include/skynet/core/task.h) | M09 |
+| HTTP / 代理 | HttpParser / LoadBalancer | [parser.h](../../../skynet/include/skynet/http/parser.h)、[load_balancer.h](../../../skynet/include/skynet/proxy/load_balancer.h) | M10 |
 | Raft / 分片 | distributed/ | （规划中） | M11 |
 | Go 微服务 | gateway / services | MVP：`gateway` + auth/data/meta/obs | M12 |
 | **项目深挖 P36–P50** | 全栈真实边界 | **[13-interview-project.md](./13-interview-project.md)**（四段式满分答法） | M13 |

@@ -110,7 +110,7 @@ flowchart TD
 | 08 | Compaction 与 MVCC | 存储引擎 | `minikv/src/core/{compaction,internal_key,manifest}.cpp` | ⭐⭐⭐⭐ | 8h | Leveled vs Tiered / 三种放大 / InternalKey 编码 / Manifest / 崩溃恢复 | ✅ 已完成 |
 | 09 | epoll 与 C++20 协程 | 网络 | `skynet/src/net/` / `skynet/src/core/` | ⭐⭐⭐⭐⭐ | 10h | IO 多路复用 / LT·ET / Reactor / co_await·promise_type / 对称转移 / Executor | ✅ 已完成 |
 | 10 | HTTP 与反向代理 | 网络 | `skynet/src/http/` / `skynet/src/proxy/` | ⭐⭐⭐⭐ | 6h | HTTP/1.1 状态机 / Router / 连接池 / 负载均衡 / 健康检查 | ✅ 已完成 |
-| 11 | Raft 共识与分片 | 分布式 | `distributed/`（规划中）/ `services/meta/watcher.go` | ⭐⭐⭐⭐⭐ | 10h | Leader 选举 / 日志复制 / 安全性 / Snapshot / PreVote / 一致性哈希分片 | 🚧 进行中 |
+| 11 | Raft 共识与分片 | 分布式 | `distributed/` / `cmd/raft`/ `services/meta/watcher.go` | ⭐⭐⭐⭐⭐ | 10h | Leader 选举 / 日志复制 / 安全性 / Snapshot / PreVote / 一致性哈希分片 | 🚧 进行中 |
 | 12 | Go 微服务与 Next.js 控制台 | 应用 | `services/` / `gateway/` / `web/` | ⭐⭐⭐⭐ | 8h | Gin 网关 / JWT·RBAC·APIKey / gRPC / Next.js + TanStack Query + SSE 仪表盘 | ✅ 已完成 |
 | 13 | 系统设计与面试题汇总 | 面试 | 全项目 + `tests/course/` | ⭐⭐⭐ | 6h | 设计 KV / 分布式锁 / 限流器 / LeetCode 1206·146·460 / 110+ 真题 / 手撕专题 / [项目真实题四段式](./13-interview-project.md) | ✅ 已完成 |
 | 14 | 从零复现整个项目 | 复现 | 全项目（端到端） | ⭐⭐⭐⭐⭐ | 20h+ | 项目脚手架 / 子系统拆分 / CI / 部署 / 全链路压测 / 简历与面试串讲 | 🚧 进行中 |

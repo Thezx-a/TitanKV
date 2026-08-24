@@ -1,6 +1,6 @@
 # Module 02 — C++ 核心语法
 
-> 对应源码：[slice.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/slice.h)、[status.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/status.h)、[coding.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/coding.h)、[db.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/db.h)
+> 对应源码：[slice.h](../../../minikv/include/minikv/slice.h)、[status.h](../../../minikv/include/minikv/status.h)、[coding.h](../../../minikv/src/utils/coding.h)、[db.h](../../../minikv/include/minikv/db.h)
 
 ## 背景与动机
 
@@ -25,7 +25,7 @@
 
 C++ 采用分离编译：声明放头文件，定义放源文件。`#include` 是预处理期的**文本粘贴**，因此头文件被多次包含会重复定义，需用 `#pragma once` 或 include guard 防护。
 
-minikv 全部头文件以 `#pragma once` 开头（见 [slice.h:1](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/slice.h)）。命名空间用 `namespace minikv { ... }` 防止符号冲突，工具函数再套一层 `namespace utils`（见 [coding.h:6-7](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/coding.h)）。
+minikv 全部头文件以 `#pragma once` 开头（见 [slice.h:1](../../../minikv/include/minikv/slice.h)）。命名空间用 `namespace minikv { ... }` 防止符号冲突，工具函数再套一层 `namespace utils`（见 [coding.h:6-7](../../../minikv/src/utils/coding.h)）。
 
 理解分离编译最直观的方式是看一条 `.cpp` 文件是怎么变成可执行文件的——预处理、编译、汇编、链接四步，每一步产物不同、看的对象不同：
 
@@ -42,7 +42,7 @@ flowchart LR
 
 ### 2.2 Slice —— 轻量字符串视图
 
-[slice.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/slice.h) 实现了一个 LevelDB 风格的 `Slice`：
+[slice.h](../../../minikv/include/minikv/slice.h) 实现了一个 LevelDB 风格的 `Slice`：
 
 ```cpp
 class Slice {
@@ -69,7 +69,7 @@ private:
 
 ### 2.3 Status —— 错误处理惯用法
 
-[status.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/status.h) 用 `Status` 替代异常：
+[status.h](../../../minikv/include/minikv/status.h) 用 `Status` 替代异常：
 
 ```cpp
 enum class StatusCode {  // 强类型枚举，不会隐式转 int
@@ -97,7 +97,7 @@ private:
 
 ### 2.4 Varint 变长编码
 
-[coding.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/coding.h) 实现了 Protobuf 风格的变长整数编码：
+[coding.h](../../../minikv/src/utils/coding.h) 实现了 Protobuf 风格的变长整数编码：
 
 ```cpp
 inline void encodeVariant32(std::string& dst, uint32_t val) {
@@ -129,7 +129,7 @@ inline void encodeVariant32(std::string& dst, uint32_t val) {
 
 **RAII**（Resource Acquisition Is Initialization）：资源获取即初始化，对象生命周期绑定资源——构造获取、析构释放，即使抛异常栈展开也会调用析构。
 
-minikv 的 `DBImpl` 持有 `std::unique_ptr<WAL>`、`std::unique_ptr<MemTable>`（见 [db_impl.h:39-42](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.h)），`DBImpl` 析构时成员 unique_ptr 自动释放，无需手写析构释放逻辑。
+minikv 的 `DBImpl` 持有 `std::unique_ptr<WAL>`、`std::unique_ptr<MemTable>`（见 [db_impl.h:39-42](../../../minikv/src/core/db_impl.h)），`DBImpl` 析构时成员 unique_ptr 自动释放，无需手写析构释放逻辑。
 
 **五法则**：若声明了析构/拷贝构造/拷贝赋值/移动构造/移动赋值中任一个，通常需全部声明。`Status` 只声明了构造，未声明拷贝/移动——编译器生成的默认版本即够用（零法则）。
 
@@ -169,7 +169,7 @@ auto make_ref(T& t) -> decltype(t) { return t; }
 
 ### 2.8 函数：重载、默认参数、`inline`、`constexpr` 函数
 
-`Slice` 有五个构造函数（见 [slice.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/slice.h)），这就是**函数重载**——同名函数形参列表不同，编译器按实参类型选最佳匹配。`Status::NotFound(std::string msg = "")` 则是**默认参数**，调用时可省略 `msg`：
+`Slice` 有五个构造函数（见 [slice.h](../../../minikv/include/minikv/slice.h)），这就是**函数重载**——同名函数形参列表不同，编译器按实参类型选最佳匹配。`Status::NotFound(std::string msg = "")` 则是**默认参数**，调用时可省略 `msg`：
 
 ```cpp
 Status s1 = Status::NotFound();              // msg = ""
@@ -197,7 +197,7 @@ int arr[kMaxHeight()];          // 编译期已知大小，C 风格数组合法
 
 ### 2.9 命名空间：`namespace`、`using`、匿名命名空间
 
-minikv 全部代码在 `namespace minikv` 下，工具函数再套 `namespace utils`（见 [coding.h:6-7](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/coding.h)）。命名空间的核心是**防符号冲突**——你写的 `Slice` 和别人库里的 `Slice` 互不打架：
+minikv 全部代码在 `namespace minikv` 下，工具函数再套 `namespace utils`（见 [coding.h:6-7](../../../minikv/src/utils/coding.h)）。命名空间的核心是**防符号冲突**——你写的 `Slice` 和别人库里的 `Slice` 互不打架：
 
 ```cpp
 namespace minikv {
@@ -246,7 +246,7 @@ C 风格转换 `(T)x` 在 C++ 里是被唾弃的——它啥都能转，编译�
 | `reinterpret_cast<T>` | 比特位重新解释 | 编译期 | `char*`↔`uint8_t*`、指针↔整数 |
 | `dynamic_cast<T>` | 多态向下转型 | 运行期 | 基类指针→派生类指针，失败返回 nullptr |
 
-minikv 里 varint 编码用 `static_cast<char>(val | 0x80)`（见 [coding.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/coding.h)），因为 `val` 是 `uint32_t`，按位或后还是 `uint32_t`，要存进 `std::string`（内部是 `char`）必须显式转：
+minikv 里 varint 编码用 `static_cast<char>(val | 0x80)`（见 [coding.h](../../../minikv/src/utils/coding.h)），因为 `val` 是 `uint32_t`，按位或后还是 `uint32_t`，要存进 `std::string`（内部是 `char`）必须显式转：
 
 ```cpp
 dst.push_back(static_cast<char>(val | 0x80));   // static_cast：相关类型
@@ -302,7 +302,7 @@ const int* const c = &x;// 都不能改
 
 ### 题 4.3（Status 实战）
 
-参考 [status.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/status.h)，实现一个 `Result<T>` 模板：成功携带 `T`，失败携带 `Status`。要求支持 `map`/`andThen` 链式调用（类似 Rust 的 `Result`）。
+参考 [status.h](../../../minikv/include/minikv/status.h)，实现一个 `Result<T>` 模板：成功携带 `T`，失败携带 `Status`。要求支持 `map`/`andThen` 链式调用（类似 Rust 的 `Result`）。
 
 ## 5. 自检
 

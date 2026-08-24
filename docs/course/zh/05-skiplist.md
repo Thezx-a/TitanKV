@@ -1,6 +1,6 @@
 # Module 05 — 跳表与有序结构
 
-> 对应源码：[skip_list.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h)（MemTable 后端）、[internal_key.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/internal_key.h)
+> 对应源码：[skip_list.h](../../../minikv/src/core/skip_list.h)（MemTable 后端）、[internal_key.h](../../../minikv/src/core/internal_key.h)
 > 对应 LeetCode：[1206. 设计跳表](https://leetcode.cn/problems/design-skiplist/)
 
 ## 背景与动机
@@ -72,7 +72,7 @@ graph LR
 
 ### 2.3 minikv 的 SkipList 实现
 
-[skip_list.h:15-21](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h) 定义节点：
+[skip_list.h:15-21](../../../minikv/src/core/skip_list.h) 定义节点：
 
 ```cpp
 struct SkipNode {
@@ -88,7 +88,7 @@ struct SkipNode {
 
 ### 2.4 查找算法
 
-[skip_list.h:68-79](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h)：
+[skip_list.h:68-79](../../../minikv/src/core/skip_list.h)：
 
 ```cpp
 std::optional<std::string> get(const std::string& key) const {
@@ -111,7 +111,7 @@ std::optional<std::string> get(const std::string& key) const {
 
 ### 2.5 插入算法
 
-[skip_list.h:38-66](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h)：
+[skip_list.h:38-66](../../../minikv/src/core/skip_list.h)：
 
 ```cpp
 void put(const std::string& key, const std::string& value) {
@@ -152,7 +152,7 @@ void put(const std::string& key, const std::string& value) {
 
 ### 2.6 随机层数
 
-[skip_list.h:125-131](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h)：
+[skip_list.h:125-131](../../../minikv/src/core/skip_list.h)：
 
 ```cpp
 int randomLevel() {
@@ -185,9 +185,9 @@ int randomLevel() {
 
 ### 2.8 删除与内存管理
 
-[skip_list.h:81-101](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h) 的 `del`：同样用 `update[]` 找前驱，逐层摘除后 `delete` 节点，并回缩 `max_level_`。
+[skip_list.h:81-101](../../../minikv/src/core/skip_list.h) 的 `del`：同样用 `update[]` 找前驱，逐层摘除后 `delete` 节点，并回缩 `max_level_`。
 
-析构函数 [skip_list.h:29-36](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h) 沿第 0 层链表逐个 `delete`——O(n) 释放。这是裸指针管理的代价；若改用 `unique_ptr` 链则更安全但增加复杂度。
+析构函数 [skip_list.h:29-36](../../../minikv/src/core/skip_list.h) 沿第 0 层链表逐个 `delete`——O(n) 释放。这是裸指针管理的代价；若改用 `unique_ptr` 链则更安全但增加复杂度。
 
 ## 3. 思考题
 
@@ -205,7 +205,7 @@ int randomLevel() {
 
 ### 题 4.2（并发安全跳表）
 
-参考 [skip_list.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h)，用 `shared_mutex` 实现读写锁版跳表。写一个基准测试：10 线程各 Put 10 万 key + 10 线程各 Get 10 万 key，对比读写锁 vs 普通 mutex 的吞吐。
+参考 [skip_list.h](../../../minikv/src/core/skip_list.h)，用 `shared_mutex` 实现读写锁版跳表。写一个基准测试：10 线程各 Put 10 万 key + 10 线程各 Get 10 万 key，对比读写锁 vs 普通 mutex 的吞吐。
 
 ### 题 4.3（跳表迭代器）
 

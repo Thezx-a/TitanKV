@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>前端控制台 · Web · TitanKV</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand"><a href="index.html">TitanKV</a> <small>分层知识图谱</small></div>
+    <nav>
+      <a href="index.html#layers">分层总览</a>
+      <a href="index.html#flow">请求链路</a>
+      <a href="https://github.com/Thezx-a/TitanKV" target="_blank" rel="noopener">源码 ↗</a>
+    </nav>
+  </div>
+</header>
+
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="side-title">分层导航</div>
+    <ul class="side-list">
+      <li><a href="client.html"><span class="layer-num">L1</span>客户端层</a></li>
+      <li><a href="network.html"><span class="layer-num">L2</span>网络库 Skynet</a></li>
+      <li><a href="gateway.html"><span class="layer-num">L3</span>网关层</a></li>
+      <li><a href="services.html"><span class="layer-num">L4</span>微服务层</a></li>
+      <li><a href="distributed.html"><span class="layer-num">L5</span>分布式层</a></li>
+      <li><a href="storage.html"><span class="layer-num">L6</span>存储引擎</a></li>
+      <li><a href="observability.html"><span class="layer-num">L7</span>可观测性</a></li>
+      <li><a href="web.html" class="active"><span class="layer-num">L8</span>前端控制台</a></li>
+    </ul>
+    <a class="side-back" href="index.html">← 返回总览</a>
+  </aside>
+
+  <main class="content">
+
+    <div class="page-head">
+      <div class="crumb"><a href="index.html">总览</a><span class="sep">/</span>前端控制台</div>
+      <h1>Web Console · Next.js 14</h1>
+      <p class="desc">
+        Next.js 14 App Router 实现的管理控制台。统一封装 <code>apiFetch</code> 自动注入 Bearer、401 跳登录；
+        middleware.ts 在路由层校验 cookie；TanStack Query 做数据获取与缓存；RAG chat 用 SSE 流式渲染。
+      </p>
+      <div class="meta">
+        <span class="chip">Next.js 14</span>
+        <span class="chip">App Router</span>
+        <span class="chip">TanStack Query</span>
+        <span class="chip">Tailwind CSS</span>
+        <span class="chip">middleware 鉴权</span>
+        <span class="chip">SSE 流式</span>
+        <span class="chip">TypeScript</span>
+      </div>
+    </div>
+
+    <h2>目录结构</h2>
+    <div class="arch-diagram">web/
+├── app/                          # App Router
+│   ├── dashboard/
+│   │   ├── layout.tsx            # 左侧导航 + 右侧内容布局
+│   │   ├── page.tsx              # 仪表盘首页
+│   │   ├── cluster/page.tsx      # 集群拓扑
+│   │   ├── collections/page.tsx  # Collection 管理
+│   │   ├── data/page.tsx         # KV 数据浏览
+│   │   ├── rag/
+│   │   │   ├── page.tsx          # RAG 文档列表
+│   │   │   └── [col]/chat/page.tsx  # 流式问答
+│   │   └── users/page.tsx        # 用户管理
+│   └── login/page.tsx           # 登录页
+├── components/                   # live-metrics / metrics-card / nav / providers
+├── lib/                          # api.ts / rag.ts / types.ts
+├── middleware.ts                 # 路由级鉴权
+├── next.config.mjs · tailwind.config.ts · tsconfig.json</div>
+
+    <h2>核心知识点</h2>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>apiFetch · 统一请求封装</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/web/lib/api.ts">web/lib/api.ts</a></span>
+      </div>
+      <div class="block-body">
+        <p>所有后端请求都走 <code>apiFetch</code>，集中处理鉴权、错误、401 跳登录。</p>
+        <ul>
+          <li><strong>API_BASE</strong>：从 <code>NEXT_PUBLIC_API_BASE</code> 注入浏览器端，默认 <code>http://localhost:8080</code>。</li>
+          <li><strong>自动 Bearer</strong>：浏览器读 <code>titan_token</code> cookie，自动注入 <code>Authorization: Bearer &lt;token&gt;</code>。</li>
+          <li><strong>query 拼接</strong>：<code>withQuery()</code> 用 <code>URLSearchParams</code> 把 query 对象拼到 URL。</li>
+          <li><strong>JSON 自动解析</strong>：按 <code>content-type</code> 判断是否 JSON；204 返回 undefined。</li>
+          <li><strong>HttpError</strong>：业务错误类，承载 <code>status / code / message / details</code>。</li>
+          <li><strong>401 处理</strong>：清 cookie + 跳 <code>/login</code>（仅浏览器端，当前不在登录页时）。</li>
+          <li><strong>便捷方法</strong>：<code>api.get / post / put / delete</code>。</li>
+          <li><strong>credentials: include</strong>：跨域时携带 cookie。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>middleware.ts · 路由级鉴权</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/web/middleware.ts">web/middleware.ts</a></span>
+      </div>
+      <div class="block-body">
+        <p>Next.js middleware 在请求到达页面前校验 <code>titan_token</code> cookie，无 token 重定向到 <code>/login</code>。保护 <code>/dashboard/*</code>。</p>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>login · 登录写 cookie</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/web/app/login/page.tsx">web/app/login/page.tsx</a></span>
+      </div>
+      <div class="block-body">
+        <p>表单提交 → 调 <code>/api/auth/login</code> → 把 JWT 写入 <code>titan_token</code> cookie → 跳 dashboard。</p>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>dashboard/layout · 左导航布局</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/web/app/dashboard/layout.tsx">web/app/dashboard/layout.tsx</a></span>
+      </div>
+      <div class="block-body">
+        <p>所有 dashboard 子页共享布局：左侧 <code>nav.tsx</code> 导航 + 右侧内容区。</p>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>rag.ts · SSE 流式问答</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/web/lib/rag.ts">web/lib/rag.ts</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/web/app/dashboard/rag/[col]/chat/page.tsx">[col]/chat/page.tsx</a></span>
+      </div>
+      <div class="block-body">
+        <p>RAG chat 走 Server-Sent Events：后端流式输出 token，前端逐字渲染。<code>rag.ts</code> 封装 SSE 客户端。</p>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>components · 可复用组件</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/web/components/">web/components/</a></span>
+      </div>
+      <div class="block-body">
+        <ul>
+          <li><strong>live-metrics.tsx</strong>：实时指标展示（SSE / 轮询）。</li>
+          <li><strong>metrics-card.tsx</strong>：单指标卡片。</li>
+          <li><strong>nav.tsx</strong>：侧边导航 + 当前页高亮。</li>
+          <li><strong>providers.tsx</strong>：全局 Provider（TanStack QueryClient 等）。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>Dashboard 各页</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/web/app/dashboard/">web/app/dashboard/</a></span>
+      </div>
+      <div class="block-body">
+        <ul>
+          <li><strong>cluster/page.tsx</strong>：集群节点拓扑展示。</li>
+          <li><strong>collections/page.tsx</strong>：Collection 列表与管理。</li>
+          <li><strong>data/page.tsx</strong>：KV 数据浏览（TanStack Query 获取）。</li>
+          <li><strong>rag/page.tsx</strong>：RAG 文档列表，<code>[col]/chat</code> 子路由聊天。</li>
+          <li><strong>users/page.tsx</strong>：用户管理（需 user:manage 权限）。</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>构建配置</h2>
+    <pre><code># 开发 :3000
+npm run dev
+
+# 生产构建
+npm run build
+
+# Make 入口
+make web-install   # npm install
+make web-dev       # npm run dev
+make web-build     # npm run build</code></pre>
+    <p><code>next.config.mjs</code> 配置插件与重写；<code>tailwind.config.ts</code> 定制设计系统；<code>tsconfig.json</code> 路径映射；<code>postcss.config.mjs</code> 处理 CSS。</p>
+
+    <h2>关键源码索引</h2>
+    <ul class="file-list">
+      <li><span class="fp">lib/api.ts</span><span class="fd">apiFetch 统一封装，401 跳登录</span></li>
+      <li><span class="fp">lib/rag.ts · lib/types.ts</span><span class="fd">RAG SSE 客户端 + 类型定义</span></li>
+      <li><span class="fp">middleware.ts</span><span class="fd">路由级 cookie 鉴权</span></li>
+      <li><span class="fp">app/login/page.tsx</span><span class="fd">登录写 titan_token cookie</span></li>
+      <li><span class="fp">app/dashboard/layout.tsx</span><span class="fd">左导航布局</span></li>
+      <li><span class="fp">app/dashboard/{cluster,collections,data,rag,users}/page.tsx</span><span class="fd">各功能页</span></li>
+      <li><span class="fp">components/{live-metrics,metrics-card,nav,providers}.tsx</span><span class="fd">可复用组件</span></li>
+      <li><span class="fp">next.config.mjs · tailwind.config.ts · tsconfig.json</span><span class="fd">构建与样式配置</span></li>
+    </ul>
+
+  
+    <h2 id="structure">详细目录结构</h2>
+    <pre><code>web/
+├── app/
+│   ├── login/          登录页
+│   ├── dashboard/
+│   │   ├── page.tsx    实时指标 SSE
+│   │   ├── data/       KV Explorer + Scan
+│   │   ├── rag/        知识库列表 + 文档 + chat SSE
+│   │   └── cluster/    Raft 拓扑 (实验)
+│   └── middleware.ts   路由守卫 (titan_token)
+├── components/         nav, metrics-card, live-metrics
+└── lib/
+    ├── api.ts          apiFetch + JWT cookie
+    ├── rag.ts          upload/retrieve/chatStream
+    └── types.ts        RagCollectionConfig 等</code></pre>
+
+  </main>
+</div>
+
+</body>
+</html>

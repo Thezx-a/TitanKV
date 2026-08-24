@@ -1,6 +1,6 @@
 # Module 10 — HTTP & Reverse Proxy
 
-> Source: [parser.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/http/parser.h), [router.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/http/router.h), [load_balancer.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/proxy/load_balancer.h), [connection_pool.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/proxy/connection_pool.h), [health_check.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/proxy/health_check.h)
+> Source: [parser.h](../../../skynet/include/skynet/http/parser.h), [router.h](../../../skynet/include/skynet/http/router.h), [load_balancer.h](../../../skynet/include/skynet/proxy/load_balancer.h), [connection_pool.h](../../../skynet/include/skynet/proxy/connection_pool.h), [health_check.h](../../../skynet/include/skynet/proxy/health_check.h)
 
 ## Background & Motivation
 
@@ -43,7 +43,7 @@ flowchart TD
 
 ### 2.1 HTTP/1.1 State-Machine Parsing
 
-[parser.h:13-31](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/http/parser.h) parses with a state machine:
+[parser.h:13-31](../../../skynet/include/skynet/http/parser.h) parses with a state machine:
 
 ```cpp
 enum class State {
@@ -92,7 +92,7 @@ HTTP uses `Content-Length` (fixed) or `Transfer-Encoding: chunked` for boundarie
 
 ### 2.3 Load-Balancing Strategies
 
-[load_balancer.h:11-52](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/proxy/load_balancer.h) defines an abstract base + four implementations:
+[load_balancer.h:11-52](../../../skynet/include/skynet/proxy/load_balancer.h) defines an abstract base + four implementations:
 
 ```cpp
 class LoadBalancer {
@@ -138,7 +138,7 @@ class ConsistentHashLB : public LoadBalancer {
 
 ### 2.4 Connection Pool
 
-[connection_pool.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/proxy/connection_pool.h): reuse TCP connections.
+[connection_pool.h](../../../skynet/include/skynet/proxy/connection_pool.h): reuse TCP connections.
 
 - **Problem**: a new TCP connection per request needs a 3-way handshake + TLS handshake — high latency, kernel resource cost.
 - **Solution**: keep several long connections per backend in a pool; borrow on request, return on completion; close idle connections past a timeout.
@@ -147,7 +147,7 @@ class ConsistentHashLB : public LoadBalancer {
 
 ### 2.5 Health Checks
 
-[health_check.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/proxy/health_check.h):
+[health_check.h](../../../skynet/include/skynet/proxy/health_check.h):
 
 - **Active probing**: periodically send a health request (e.g. `GET /health`); after N failures mark the node down.
 - **Passive circuit breaking**: when the normal-request failure rate exceeds a threshold, temporarily remove the backend; half-open probe to recover.
@@ -171,7 +171,7 @@ Client ──► [skynet Gateway]
         Backend Pool (N backends)
 ```
 
-skynet's `gateway/` ([gateway/main.cpp](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/gateway/main.cpp)) is exactly such a reverse proxy; config in [gateway.yaml](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/gateway/gateway.yaml).
+skynet's `gateway/` ([gateway/main.cpp](../../../skynet/gateway/main.cpp)) is exactly such a reverse proxy; config in [gateway.yaml](../../../skynet/gateway/gateway.yaml).
 
 ## 3. Thinking Questions
 
@@ -185,7 +185,7 @@ skynet's `gateway/` ([gateway/main.cpp](file:///c:/Users/Administrator/Desktop/h
 
 ### Exercise 4.1 (Hand-write an HTTP request parser)
 
-Following [parser.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/http/parser.h), implement an HTTP/1.1 request line + header parser (no body). Test: `feed` the same request in 3 chunks (simulate splitting), verify final `isComplete()` and correct fields.
+Following [parser.h](../../../skynet/include/skynet/http/parser.h), implement an HTTP/1.1 request line + header parser (no body). Test: `feed` the same request in 3 chunks (simulate splitting), verify final `isComplete()` and correct fields.
 
 ### Exercise 4.2 (Smooth Weighted Round-Robin)
 
@@ -193,7 +193,7 @@ Implement Nginx's smooth WRR: 3 backends with weights {a:5, b:1, c:1}, call `sel
 
 ### Exercise 4.3 (Consistent-Hash LB)
 
-Following `ConsistentHashLB` in [load_balancer.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/proxy/load_balancer.h), implement `select(key)`: hash the key, find the next virtual node clockwise. Test: 1M keys across 5 backends, std-dev < 5%; after taking 1 backend down, only ~1/5 of keys migrate.
+Following `ConsistentHashLB` in [load_balancer.h](../../../skynet/include/skynet/proxy/load_balancer.h), implement `select(key)`: hash the key, find the next virtual node clockwise. Test: 1M keys across 5 backends, std-dev < 5%; after taking 1 backend down, only ~1/5 of keys migrate.
 
 ### Exercise 4.4 (Connection Pool + Health Check)
 

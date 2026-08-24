@@ -54,6 +54,15 @@
       - Truncated tail record (CRC fail / short read) is ignored — torn-write tolerant recovery.
       - Tests: 5 cases incl. round-trip, remove-persist, reset-clears, truncated-tail tolerance.
       - Fixed a latent durability gap: prior code restarted with empty Version and lost existing SSTs.
+- [x] WP 1.2.8  MemTable `shared_ptr` + lock-free Get/Iterator after snapshot
+      - `memtable_` / `immutable_list_` hold `shared_ptr<MemTable>`
+      - Get/newIterator copy refs under `write_mutex_`, search outside the lock
+      - Flush thread shares ownership via `flush_queue_`; IO without write lock
+      - Tests: `test_memtable_snapshot.cpp`
+- [x] WP 1.2.9  BlockCache for decompressed SST data blocks
+      - `core/block_cache.h` LRU by `(path, offset)` with byte capacity
+      - Wired through `SSTableReader::open` / `DBImpl`
+      - Tests: `test_block_cache.cpp`
 - [ ] WP 1.2.5  Column Family (per-CF MemTable + SST, shared WAL)
 - [ ] WP 1.2.6  Optimistic transactions (Begin/Commit/Rollback, OCC)
 - [ ] WP 1.2.7  Configurable compaction strategy (Leveled vs Size-tiered)
@@ -70,24 +79,26 @@
 
 ## Phase 3 — Go API gateway + auth service
 
-- [ ] Gin gateway, middleware chain (RequestID / Logger / Recover / RateLimit / Auth / RBAC)
-- [ ] Auth service (register/login/refresh, bcrypt, JWT, RBAC)
-- [ ] API Key issuance / revocation + Redis-backed middleware
-- [ ] Rate limiter (token bucket via Redis Lua)
+- [x] Gin gateway, middleware chain (RequestID / Logger / Recover / RateLimit / Auth / RBAC)
+- [x] Auth service (register/login/refresh, bcrypt, JWT, RBAC)
+- [x] API Key issuance / revocation + Redis-backed middleware (dev-friendly defaults)
+- [x] Rate limiter (token bucket via Redis Lua when Redis up)
 - [ ] GitHub OAuth2 login
 
 ## Phase 4 — Go data / meta / observability + Go SDK
 
-- [ ] Data service (Put/Get/Delete/Batch/Scan SSE)
-- [ ] Meta service (Collection CRUD, hot config via etcd watch)
-- [ ] Observability service (metrics aggregation, health-rollup)
-- [ ] Go SDK `client-go` with typed errors and retries
+- [x] Data service (Put/Get/Delete/Batch/Scan SSE) + `MINIKV_ADDR` TCP client
+- [x] Meta service (Collection CRUD; rag_config / type=rag)
+- [x] Observability service (metrics aggregation / scraper hooks)
+- [x] Go SDK `client-go/titan` (basic)
+- [x] RAG service `services/rag` (:8085) — ingest / retrieve / chat SSE + HNSW side index
 
 ## Phase 5 — Distributed: hashicorp/raft (1-node teaching) + sharding later
 
 - [x] `distributed/` — 1-node raft bootstrap, FSM Apply Put/Del, Snapshot/Restore JSON
 - [x] Unit test elects leader + Put/Get (`go test ./distributed/...`)
 - [x] Optional `MINIKV_ADDR` forward after Apply (best-effort; Raft truth is in-memory FSM)
+- [x] `cluster.go` JoinCluster helper + `cmd/raft` entry + `gateway/shard.go` helper
 - [ ] Multi-node join/leave + real quorum
 - [ ] etcd service discovery
 - [ ] Consistent-hash sharding / rebalance
@@ -95,15 +106,14 @@
 
 ## Phase 6 — Next.js admin console
 
-- [ ] App structure (App Router, Tailwind, Shadcn UI, TanStack Query)
-- [ ] Login + route guard
-- [ ] Dashboard (QPS, latency, storage, node status; live via SSE)
-- [ ] Data Explorer (browse KV, Scan, inline edit, bulk delete)
-- [ ] Collection management
-- [ ] Users & roles
-- [ ] API Key management
-- [ ] Config management
-- [ ] Cluster status (Raft topology + log entries)
+- [x] App structure (App Router, Tailwind, TanStack Query)
+- [x] Login + route guard
+- [x] Dashboard live metrics (SSE)
+- [x] Data Explorer (browse KV / Scan)
+- [x] Collection management (incl. type=rag)
+- [x] RAG pages (`web/app/dashboard/rag/*`) + chat SSE UI
+- [x] Cluster page (`web/app/dashboard/cluster`)
+- [ ] Users & roles / API Key / Config polish
 
 ## Phase 7 — Observability + K8s + CI/CD
 
@@ -116,13 +126,14 @@
 
 ## Phase 8 — CLI + multi-language SDK + docs
 
-- [ ] `client-cli` Cobra tool (keyforge get/put/scan/cluster/members/admin)
+- [x] `client-cli` Cobra `keyforge` (ping/put/get/scan) against gateway
+- [ ] cluster/members/admin subcommands
 - [ ] TypeScript SDK generated from OpenAPI
 - [ ] Python SDK generated from OpenAPI
-- [ ] Documentation (ARCHITECTURE, STORAGE_ENGINE, DISTRIBUTED, API, DEPLOYMENT)
+- [x] Docs sync: README / RUN / STORAGE_ENGINE / RAG-ARCHITECTURE / design.md
 
 ## Cross-phase utilities
 
-- [ ] Unified Makefile target (build/test/lint/proto/docker-up)
+- [x] Unified Makefile target (build/test/lint/docker-up/run-all/run-rag/smoke-skynet)
 - [ ] Benchmark regression tracking
 - [x] Repo-rename: GitHub repo `LumenDB` → `TitanKV`

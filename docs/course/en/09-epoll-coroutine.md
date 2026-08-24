@@ -1,6 +1,6 @@
 # Module 09 — epoll & C++20 Coroutines
 
-> Source: [io_context.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/net/io_context.h), [task.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/core/task.h), [executor.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/core/executor.h), [socket.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/net/socket.h)
+> Source: [io_context.h](../../../skynet/include/skynet/net/io_context.h), [task.h](../../../skynet/include/skynet/core/task.h), [executor.h](../../../skynet/include/skynet/core/executor.h), [socket.h](../../../skynet/include/skynet/net/socket.h)
 
 ## Background & Motivation
 
@@ -40,7 +40,7 @@ Why epoll is fast:
 
 ### 2.2 minikv's IOContext
 
-[io_context.h:10-25](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/net/io_context.h) wraps epoll:
+[io_context.h:10-25](../../../skynet/include/skynet/net/io_context.h) wraps epoll:
 
 ```cpp
 class IOContext {
@@ -83,9 +83,11 @@ Classic variants:
 
 **Repo today (`minikv_server`)**: Main only accepts, Subs do connection IO (default `--io-threads 4`), epoll **LT** (`EPOLLIN` only); `db_` runs on a business pool (default `--biz-threads 4`) and writeback uses `queueInLoop` on the owning Sub. skynet remains **ET + coroutines**; do not mix the two.
 
+**Repo today (`skynet_gateway`)**: Main runs accept coroutine only; Subs (`listen.threads`, default 4) each own an `IOContext` with epoll **ET**, `co_await` full HTTP, then LB to Gin `:18080`. Not a blocking thread-pool proxy.
+
 Key components: EventLoop (IOContext), Channel (fd+events+callback), Acceptor, TcpConnection, ThreadPool.
 
-skynet's `Executor` ([executor.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/core/executor.h)) is the EventLoop + coroutine scheduler.
+skynet's `Executor` ([executor.h](../../../skynet/include/skynet/core/executor.h)) is the EventLoop + coroutine scheduler.
 
 #### Main-Sub Reactor Multi-Threaded Architecture
 
@@ -143,7 +145,7 @@ Compared to Go goroutines (stackful): stackful coroutines have their own stack a
 
 ### 2.6 The Task Type and promise_type
 
-[task.h:22-34](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/core/task.h) implements `promise_type`:
+[task.h:22-34](../../../skynet/include/skynet/core/task.h) implements `promise_type`:
 
 ```cpp
 struct promise_type {
@@ -176,7 +178,7 @@ The `co_await expr` flow:
 2. If false, call `expr.await_suspend(handle)`: may return void (suspend) / bool (true=suspend, false=resume) / `coroutine_handle` (symmetric transfer to another coroutine).
 3. On resume, call `expr.await_resume()` for the result.
 
-[task.h:49-57](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/core/task.h) — Task itself is an Awaiter:
+[task.h:49-57](../../../skynet/include/skynet/core/task.h) — Task itself is an Awaiter:
 
 ```cpp
 bool await_ready() const { return false; }
@@ -240,11 +242,11 @@ skynet::Task<int> handle_client(TcpStream stream) {
 
 ### Exercise 4.1 (Hand-write an epoll ET echo server)
 
-Following [io_context.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/net/io_context.h), implement an echo server with epoll ET: set `O_NONBLOCK` on listenfd and clientfd, register `EPOLLIN | EPOLLET`, loop accept to EAGAIN, loop read to EAGAIN. Benchmark with `ab` or `wrk`.
+Following [io_context.h](../../../skynet/include/skynet/net/io_context.h), implement an echo server with epoll ET: set `O_NONBLOCK` on listenfd and clientfd, register `EPOLLIN | EPOLLET`, loop accept to EAGAIN, loop read to EAGAIN. Benchmark with `ab` or `wrk`.
 
 ### Exercise 4.2 (Hand-write a Minimal Task)
 
-Following [task.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/core/task.h), implement a minimal `Task<T>`: support `co_return`, `co_await`, exception propagation, lazy start. Test: `Task<int> f() { co_return 42; }`, `auto v = co_await f();` verify v==42.
+Following [task.h](../../../skynet/include/skynet/core/task.h), implement a minimal `Task<T>`: support `co_return`, `co_await`, exception propagation, lazy start. Test: `Task<int> f() { co_return 42; }`, `auto v = co_await f();` verify v==42.
 
 ### Exercise 4.3 (Coroutine-ize a TCP Read)
 

@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>分布式层 · Distributed · TitanKV</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand"><a href="index.html">TitanKV</a> <small>分层知识图谱</small></div>
+    <nav>
+      <a href="index.html#layers">分层总览</a>
+      <a href="index.html#flow">请求链路</a>
+      <a href="https://github.com/Thezx-a/TitanKV" target="_blank" rel="noopener">源码 ↗</a>
+    </nav>
+  </div>
+</header>
+
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="side-title">分层导航</div>
+    <ul class="side-list">
+      <li><a href="client.html"><span class="layer-num">L1</span>客户端层</a></li>
+      <li><a href="network.html"><span class="layer-num">L2</span>网络库 Skynet</a></li>
+      <li><a href="gateway.html"><span class="layer-num">L3</span>网关层</a></li>
+      <li><a href="services.html"><span class="layer-num">L4</span>微服务层</a></li>
+      <li><a href="distributed.html" class="active"><span class="layer-num">L5</span>分布式层</a></li>
+      <li><a href="storage.html"><span class="layer-num">L6</span>存储引擎</a></li>
+      <li><a href="observability.html"><span class="layer-num">L7</span>可观测性</a></li>
+      <li><a href="web.html"><span class="layer-num">L8</span>前端控制台</a></li>
+    </ul>
+    <a class="side-back" href="index.html">← 返回总览</a>
+  </aside>
+
+  <main class="content">
+
+    <div class="page-head">
+      <div class="crumb"><a href="index.html">总览</a><span class="sep">/</span>分布式层</div>
+      <h1>Distributed · Raft 共识与分片</h1>
+      <p class="desc">
+        基于 <code>hashicorp/raft</code> 的教学型单节点集群，验证 Raft 三个核心抽象：
+        Apply / Snapshot / Restore。多节点复制与一致性哈希分片为后续规划。
+      </p>
+      <div class="meta">
+        <span class="chip">hashicorp/raft</span>
+        <span class="chip">KVFSM</span>
+        <span class="chip">Apply 真理源</span>
+        <span class="chip">Snapshot/Restore</span>
+        <span class="chip">WriteForwarder</span>
+        <span class="chip">JoinCluster 演示</span>
+        <span class="chip">gateway/shard.go</span>
+      </div>
+    </div>
+
+    <h2>Raft 核心三件套</h2>
+    <p>Raft 用 FSM（有限状态机）抽象让副本间状态一致：所有写都通过 <code>Apply(log)</code> 顺序执行，<code>Snapshot</code> 截断日志，<code>Restore</code> 重建状态。</p>
+
+    <div class="arch-diagram">Client ──▶ raft.Apply(Log{op, key, value})   (leader 提交, 半数复制后 commit)
+                    │
+                    ▼
+              KVFSM.Apply(l *raft.Log)
+                    │  decodeCommand → applyLocal
+                    ▼
+              in-memory map[key] = value     ← 真理源 (source of truth)
+                    │
+                    ├── best-effort ▼ WriteForwarder.Put(key, value)  → MiniKV (非阻塞, 不影响 Apply)
+                    │
+              Snapshot()  ──▶ Persist(sink)  JSON 编码整个 map → raft snapshot 文件
+              Restore(rc) ──▶ JSON 解码 → 替换 map   (重启/追赶时重建状态)</div>
+
+    <h2>核心组件知识点</h2>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>KVFSM · 内存 map 状态机</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/distributed/fsm.go">distributed/fsm.go</a></span>
+      </div>
+      <div class="block-body">
+        <p>实现 <code>raft.FSM</code> 接口，把 Raft 日志应用到内存 map，是集群的唯一真理源。</p>
+        <ul>
+          <li><strong>Apply(l *raft.Log)</strong>：<code>decodeCommand</code> 解码 → <code>applyLocal</code>。<code>opPut</code> 写 map，<code>opDelete</code> 删 map。</li>
+          <li><strong>WriteForwarder</strong>：可选，<code>best-effort</code> 把 Put/Delete 镜像到 MiniKV。<strong>不能让 Apply 失败</strong>（外部 IO 是非确定性的，会让副本不一致）。</li>
+          <li><strong>Get(key)</strong>：直接读本地 map，<strong>不走 Raft</strong>——读不要求一致性共识。</li>
+          <li><strong>Snapshot()</strong>：读锁克隆整个 map → 返回 <code>kvSnapshot</code>，<code>Persist(sink)</code> 用 JSON 编码写入 raft sink。</li>
+          <li><strong>Restore(rc)</strong>：JSON 解码 → 替换 <code>f.data</code>，用于新副本追赶 leader 或重启恢复。</li>
+          <li><strong>错误处理</strong>：<code>Persist</code> 失败时 <code>sink.Cancel()</code>，让 raft 重试。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>command · Raft 日志条目</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/distributed/command.go">distributed/command.go</a></span>
+      </div>
+      <div class="block-body">
+        <p><code>command</code> 是序列化进 Raft Log 的载荷：<code>{Op: opPut|opDelete, Key, Value}</code>。<code>decodeCommand</code> 反序列化给 Apply。</p>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>cluster + node · 集群与节点管理</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/distributed/cluster.go">cluster.go</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/distributed/node.go">node.go</a></span>
+      </div>
+      <div class="block-body">
+        <ul>
+          <li><strong>cluster.go</strong>：集群拓扑、节点发现、状态同步。</li>
+          <li><strong>node.go</strong>：单节点生命周期、状态维护、与 raft 实例绑定。</li>
+          <li><strong>raft_node_test.go</strong>：单节点教学集群测试。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>http + minikv_forward · 接入与转发</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/distributed/http.go">http.go</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/distributed/minikv_forward.go">minikv_forward.go</a></span>
+      </div>
+      <div class="block-body">
+        <p><code>http.go</code> 暴露 HTTP 接口让客户端提交 Raft 写；<code>minikv_forward.go</code> 实现 <code>WriteForwarder</code> 把 Apply 的写入转发到 MiniKV。</p>
+      </div>
+    </div>
+
+    <h2>规划中的能力</h2>
+    <table class="kp">
+      <thead><tr><th>能力</th><th>状态</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>1-node Raft 教学集群</td><td>✅ done</td><td>验证 FSM 三件套</td></tr>
+        <tr><td>多节点复制</td><td>⏳ planned</td><td>多机 leader/follower，真实半数复制</td></tr>
+        <tr><td>一致性哈希分片</td><td>⏳ planned</td><td>distributed/shard，与 skynet 的 ConsistentHashLB 联动</td></tr>
+        <tr><td>etcd 服务发现</td><td>⏳ planned</td><td>动态节点注册与发现</td></tr>
+        <tr><td>gRPC server 包 minikv</td><td>⏳ planned</td><td>替代原生 TCP，更标准的接口</td></tr>
+      </tbody>
+    </table>
+
+    <h2>关键源码索引</h2>
+    <ul class="file-list">
+      <li><span class="fp">distributed/fsm.go</span><span class="fd">KVFSM: Apply / Snapshot / Restore + WriteForwarder</span></li>
+      <li><span class="fp">distributed/command.go</span><span class="fd">opPut / opDelete 日志载荷</span></li>
+      <li><span class="fp">distributed/cluster.go · node.go</span><span class="fd">集群与节点管理</span></li>
+      <li><span class="fp">distributed/http.go · minikv_forward.go</span><span class="fd">HTTP 接入 + MiniKV 转发器</span></li>
+      <li><span class="fp">distributed/doc.go · raft_node_test.go</span><span class="fd">包文档 + 单节点测试</span></li>
+      <li><span class="fp">cmd/raft/main.go</span><span class="fd">Raft 服务入口</span></li>
+    </ul>
+
+  
+    <h2 id="structure">详细目录结构</h2>
+    <pre><code>distributed/
+├── fsm.go              KVFSM: Apply/Snapshot/Restore
+├── command.go          {Op, Key, Value} 日志载荷
+├── node.go             Bootstrap + raft 封装
+├── cluster.go          JoinCluster 多 voter 演示
+├── http.go             HTTP 调试接口
+├── minikv_forward.go   WriteForwarder (best-effort)
+└── raft_node_test.go   单测: 选主 + Put/Get
+
+cmd/raft/main.go        教学节点 :8090/:8091
+gateway/shard.go        FNV 分片辅助 (实验)</code></pre>
+    <div class="callout"><span class="ctitle">现状诚实边界</span>
+      已实现 1-node Bootstrap + FSM + Snapshot；JoinCluster 为多 voter 演示。
+      多机生产集群、自动 rebalance、跨片事务 <strong>未做</strong>——简历可不写 Raft。
+    </div>
+
+  </main>
+</div>
+
+</body>
+</html>

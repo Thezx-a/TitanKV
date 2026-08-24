@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>存储引擎层 · MiniKV · TitanKV</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand"><a href="index.html">TitanKV</a> <small>分层知识图谱</small></div>
+    <nav>
+      <a href="index.html#layers">分层总览</a>
+      <a href="index.html#flow">请求链路</a>
+      <a href="https://github.com/Thezx-a/TitanKV" target="_blank" rel="noopener">源码 ↗</a>
+    </nav>
+  </div>
+</header>
+
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="side-title">分层导航</div>
+    <ul class="side-list">
+      <li><a href="client.html"><span class="layer-num">L1</span>客户端层</a></li>
+      <li><a href="network.html"><span class="layer-num">L2</span>网络库 Skynet</a></li>
+      <li><a href="gateway.html"><span class="layer-num">L3</span>网关层</a></li>
+      <li><a href="services.html"><span class="layer-num">L4</span>微服务层</a></li>
+      <li><a href="distributed.html"><span class="layer-num">L5</span>分布式层</a></li>
+      <li><a href="storage.html" class="active"><span class="layer-num">L6</span>存储引擎</a></li>
+      <li><a href="observability.html"><span class="layer-num">L7</span>可观测性</a></li>
+      <li><a href="web.html"><span class="layer-num">L8</span>前端控制台</a></li>
+    </ul>
+    <a class="side-back" href="index.html">← 返回总览</a>
+  </aside>
+
+  <main class="content">
+
+    <div class="page-head">
+      <div class="crumb"><a href="index.html">总览</a><span class="sep">/</span>存储引擎层</div>
+      <h1>MiniKV · LSM-Tree 存储引擎</h1>
+      <p class="desc">
+        C++17 从零实现的 LSM-Tree 存储引擎，参考 LevelDB / RocksDB 的公开资料。
+        一条 <code>db.Put()</code> 写入 WAL、落到 MemTable（`shared_ptr` 锁外读）（跳表）、刷盘成 SSTable、被 Compaction 合并——
+        这条链路上每个组件都在 <code>minikv/src/core/</code> 里。
+      </p>
+      <div class="meta">
+        <span class="chip">C++17</span>
+        <span class="chip">WAL</span>
+        <span class="chip">SkipList</span>
+        <span class="chip">SSTable</span>
+        <span class="chip">Compaction</span>
+        <span class="chip">MVCC</span>
+        <span class="chip">BloomFilter</span>
+        <span class="chip">主从 Reactor</span>
+      </div>
+    </div>
+
+    <figure class="layer-banner">
+      <img alt="LSM-Tree 存储引擎概念图" src="architecture.svg" />
+    </figure>
+
+    <h2>整体写入 / 读取流程</h2>
+    <p>LSM-Tree 的核心是「写优化、读放大」：写入只追加到内存与 WAL，读取需要合并多个层级。下面把写路径与读路径并排竖向展开。</p>
+
+    <div class="vflow-pair">
+      <div>
+        <h4>写路径 · Put / Write</h4>
+        <div class="vflow">
+          <div class="vstep"><div class="vnode">1</div><div class="vbody">
+            <p class="vtitle">DBImpl::put / write</p>
+            <p class="vdesc">取 <code>write_mutex_</code>，组队 Group Commit。</p>
+          </div></div>
+          <div class="vstep"><div class="vnode">2</div><div class="vbody">
+            <p class="vtitle">WAL::append + fsync</p>
+            <p class="vdesc">leader 批量追加日志并 fsync（≤32 条 / 500μs 超时）。</p>
+            <p class="vdetail"><strong>崩溃点 A：</strong>fsync 返回前崩溃 → 这批写入丢失但一致。</p>
+          </div></div>
+          <div class="vstep"><div class="vnode">3</div><div class="vbody">
+            <p class="vtitle">MemTable::put (SkipList)</p>
+            <p class="vdesc">写锁下插入跳表，seq 递增，InternalKey 编码。</p>
+          </div></div>
+          <div class="vstep"><div class="vnode">4</div><div class="vbody">
+            <p class="vtitle">maybeFlush</p>
+            <p class="vdesc">mem_usage 超阈值 → swap memtable_ → 旧表入 immutable_list_ → push flush_queue_。</p>
+            <p class="vdetail"><strong>关键：</strong>写路径只做轻量 swap，不等 SSTable 构建。</p>
+          </div></div>
+          <div class="vstep"><div class="vnode alt">5</div><div class="vbody">
+            <p class="vtitle">flush_thread_ 后台刷盘</p>
+            <p class="vdesc">SkipList 扫描 → SSTableBuilder::finish → Version::addLevelFile(L0) → unlink 旧 WAL。</p>
+            <p class="vdetail"><strong>崩溃点 B：</strong>SSTable 写一半崩溃 → 恢复时检测 magic/footer 不符，丢弃半成品。</p>
+          </div></div>
+        </div>
+      </div>
+      <div>
+        <h4>读路径 · Get</h4>
+        <div class="vflow">
+          <div class="vstep"><div class="vnode">1</div><div class="vbody">
+            <p class="vtitle">DBImpl::get</p>
+            <p class="vdesc">在 <code>write_mutex_</code> 下快照 memtable_ + immutable_list_。</p>
+          </div></div>
+          <div class="vstep"><div class="vnode">2</div><div class="vbody">
+            <p class="vtitle">memtable_-&gt;get</p>
+            <p class="vdesc">最新写入，跳表查找 O(log n)。</p>
+          </div></div>
+          <div class="vstep"><div class="vnode">3</div><div class="vbody">
+            <p class="vtitle">immutable_list_ 遍历</p>
+            <p class="vdesc">冻结中待刷盘的 MemTable，FIFO 顺序查找。</p>
+          </div></div>
+          <div class="vstep"><div class="vnode">4</div><div class="vbody">
+            <p class="vtitle">L0 SSTable（时间倒序）</p>
+            <p class="vdesc">BloomFilter 先 <code>mightContain</code> 过滤，命中再读 Block。</p>
+          </div></div>
+          <div class="vstep"><div class="vnode alt">5</div><div class="vbody">
+            <p class="vtitle">L1..Ln SSTable + BlockCache</p>
+            <p class="vdesc">层级查找，BlockCache 命中优先；返回最新 seq 的可见版本。</p>
+          </div></div>
+        </div>
+      </div>
+    </div>
+
+    <h2>核心组件知识点</h2>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>WAL · Write-Ahead Log</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/minikv/src/core/wal.cpp">minikv/src/core/wal.cpp</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/minikv/src/core/wal.h">wal.h</a></span>
+      </div>
+      <div class="block-body">
+        <p>WAL 是崩溃恢复的命脉：写入先追加到磁盘日志，再改内存，崩溃后通过回放 WAL 重建 MemTable。</p>
+        <ul>
+          <li><strong>文件命名</strong>：<code>wal-&lt;N&gt;.log</code>，每个 MemTable 一代对应一个 WAL 文件，<code>file_number</code> 由 Version 单调分配。</li>
+          <li><strong>Group Commit</strong>：批量 WAL + 摊销 fsync。写线程组队（<code>kMaxGroupSize=32</code>，超时 <code>500μs</code>），leader 一次性把整组写盘并 fsync，follower 等待。</li>
+          <li><strong>WAL 轮转</strong>：<code>rotateWal()</code> 在 MemTable 冻结时切新文件，旧 WAL 在 flushOne 完成后 <code>unlink</code>。</li>
+          <li><strong>恢复</strong>：<code>recover()</code> → <code>listWalFiles()</code> → <code>replayWalFile()</code> 重放到 MemTable。</li>
+          <li><strong>垃圾回收</strong>：<code>purgeOrphanSSTables()</code> 清理崩溃遗留、不在 MANIFEST 中的孤儿 SST 文件。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>MemTable · 跳表 SkipList</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/minikv/src/core/skip_list.h">minikv/src/core/skip_list.h</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/minikv/src/core/memtable.cpp">memtable.cpp</a></span>
+      </div>
+      <div class="block-body">
+        <p>MemTable 用跳表实现有序写入与快速查找，并发用读写锁（<code>std::shared_mutex</code>）控制。</p>
+        <ul>
+          <li><strong>最大层数</strong>：<code>kMaxLevel = 32</code>，与 LevelDB 一致，保证概率层数分布合理。</li>
+          <li><strong>随机层数</strong>：<code>randomLevel()</code> 每层以 0.5 概率提升（<code>std::uniform_int_distribution(0,1)</code>），期望层高 O(log n)。</li>
+          <li><strong>SkipNode 结构</strong>：<code>key / value / forward[level+1]</code>，<code>forward</code> 即各层后继指针。</li>
+          <li><strong>并发</strong>：<code>put/del</code> 持写锁，<code>get/entries/approximateMemoryUsage</code> 持读锁，读写不互斥。</li>
+          <li><strong>内存跟踪</strong>：<code>mem_usage_</code> 累加 <code>sizeof(SkipNode) + key.size() + value.size()</code>，用于 <code>maybeFlush()</code> 触发阈值。</li>
+          <li><strong>比较函数</strong>：<code>InternalKeyCompare</code>——按 user_key 升序，相同 user_key 按 seq 降序（新版本在前）。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>SSTable · 磁盘文件布局</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/minikv/src/core/sstable_builder.h">sstable_builder.h</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/minikv/src/core/sstable_reader.cpp">sstable_reader.cpp</a></span>
+      </div>
+      <div class="block-body">
+        <p>SSTable 是不可变的有序磁盘文件，由数据块 + 索引块 + 尾部 footer 组成。</p>
+        <pre><code>+-----------------------------+
+| data block #0 .. #N         |   每块头 13 字节:
+| index block                 |     crc(4) + physical_size(4)
+| footer (48 bytes)          |     + uncompressed_size(4) + type(1)
++-----------------------------+
+
+Footer 48 字节:
+  8B index_offset | 8B index_size
+  1B format_version(=1) | 1B reserved
+  30B padding(0) | 8B magic = 0x4D4B53535441424C</code></pre>
+        <ul>
+          <li><strong>块大小</strong>：默认 <code>block_size = 4096</code> 字节，超过即 <code>flushDataBlock()</code>。</li>
+          <li><strong>索引块</strong>：保留 <code>[crc][size][entries]</code> 头部，可不解压直接解析；存储各数据块的边界 key。</li>
+          <li><strong>魔数校验</strong>：<code>kSSTableMagic = 0x4D4B53535441424C</code>（"MKSSTABLE"），打开时校验。</li>
+          <li><strong>版本兼容</strong>：<code>format_version</code> 字段区分新旧 block 头格式（legacy 8 字节 vs 新 13 字节）。</li>
+          <li><strong>BloomFilter</strong>：构建时同步生成，落盘到独立文件，读时先过滤不存在的 key。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>Compaction · 合并策略</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/minikv/src/core/compaction.cpp">minikv/src/core/compaction.cpp</a></span>
+      </div>
+      <div class="block-body">
+        <p>Compaction 把多代 SSTable 合并去重，清理 tombstone，控制读放大。独立后台线程循环执行。</p>
+        <ul>
+          <li><strong>触发条件</strong>：L0 文件数 <code>&gt;= l0_trigger_</code> 或 <code>triggerCompaction()</code> 手动触发。</li>
+          <li><strong>合并流程</strong>：<code>mergeLevelFiles</code> 把 src 层所有文件读入内存 → <code>std::sort</code> 按 InternalKey 排序 → 重建新 SST 到 <code>dst_level</code>。</li>
+          <li><strong>去重规则</strong>：相同 user_key 只保留最新 InternalKey（排序后第一个）；旧版本丢弃。</li>
+          <li><strong>tombstone 清理</strong>：<code>InternalKeyType == kDeletion</code> 时跳过（仅在合并到更深一层时安全清除）。</li>
+          <li><strong>缓存失效</strong>：<code>invalidateCache(src_files)</code> 清理旧文件在 BlockCache 中的条目。</li>
+          <li><strong>原子提交</strong>：成功后 <code>version_-&gt;addLevelFile(dst, newFile)</code> + <code>removeLevelFiles(src)</code> + <code>unlink</code> 旧文件。</li>
+          <li><strong>空文件优化</strong>：若合并后 <code>kept == 0</code>，删除新文件并直接清空 src 层。</li>
+          <li><strong>失败重试</strong>：<code>compaction_failures_</code> 计数，失败时设 <code>triggered_=true</code> 下轮重试。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>MVCC · 多版本并发控制</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/minikv/src/core/internal_key.cpp">minikv/src/core/internal_key.cpp</a></span>
+      </div>
+      <div class="block-body">
+        <p>InternalKey = <code>user_key + trailer(8 字节)</code>。trailer 编码 seq 与 type，让多版本与删除标记在同一个有序结构中并存。</p>
+        <pre><code>// trailer 打包
+uint64_t packed = (seq &lt;&lt; kTypeBits) | type;
+// 内部键排序规则 (InternalKeyCompare)
+1) user_key 升序
+2) 相同 user_key → seq 降序 (新版本在前)
+3) 相同 seq → type 升序</code></pre>
+        <ul>
+          <li><strong>API</strong>：<code>InternalKeyEncode / UserKey / Sequence / Type / Compare</code>。</li>
+          <li><strong>异常容错</strong>：长度不足 trailer 时退化为原始字节序比较，避免越界。</li>
+          <li><strong>小端编码</strong>：<code>utils::encodeFixed64 / decodeFixed64</code>，跨平台一致。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>BloomFilter · 布隆过滤器</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/minikv/src/core/bloom_filter.h">minikv/src/core/bloom_filter.h</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/minikv/src/utils/hash.h">utils/hash.h</a></span>
+      </div>
+      <div class="block-body">
+        <p>SSTable 的索引前置：读 key 前先问 BloomFilter「可能存在吗」，避免无谓的磁盘 IO。</p>
+        <ul>
+          <li><strong>双哈希</strong>：<code>h1 = murmurHash2(key, 0xbc9f1d34)</code>、<code>h2 = murmurHash2(key, 0x9e3779b9)</code>，<code>pos = (h1 + i*h2) % bits</code>。</li>
+          <li><strong>误判率</strong>：默认 1%（<code>false_positive_rate = 0.01</code>），bits_per_key 由 <code>-log(p) / log(2)^2</code> 推导。</li>
+          <li><strong>哈希次数</strong>：<code>num_hashes = bits * log(2)</code>，钳制在 [1, 30]。</li>
+          <li><strong>持久化</strong>：<code>persist()</code> 写 <code>num_hashes_ + bits_per_key_ + bits_.size() + bits_</code>，<code>load()</code> 反序列化。</li>
+          <li><strong>位图操作</strong>：<code>bits_[pos/8] |= (1 &lt;&lt; (pos%8))</code>，查询时全部命中才返回 true。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>DBImpl · 对外接口与后台线程</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/minikv/src/core/db_impl.h">minikv/src/core/db_impl.h</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/minikv/src/core/db_impl.cpp">db_impl.cpp</a></span>
+      </div>
+      <div class="block-body">
+        <p>DBImpl 实现对外 <code>DB</code> 接口，编排 WAL / MemTable / flush / Compaction 多个线程。</p>
+        <ul>
+          <li><strong>对外 API</strong>：<code>put / get / del / write(WriteBatch) / newIterator / compact / waitFlush</code>。</li>
+          <li><strong>可见性契约</strong>：Get 在 <code>write_mutex_</code> 下快照整个 <code>immutable_list_</code>，随后无锁迭代——读不被写阻塞。</li>
+          <li><strong>后台 flush</strong>：写路径只做「swap memtable → immutable, rotate WAL, push to flush_queue_」，从不等待 SSTable 构建。</li>
+          <li><strong>flush 线程</strong>：<code>flushLoop()</code> 从 <code>flush_queue_</code> FIFO 取出，<code>flushOne()</code> 做 SkipList 扫描 → SSTableBuilder → addLevelFile → unlink WAL。</li>
+          <li><strong>数据结构</strong>：<code>memtable_</code>(最新) → <code>immutable_list_.back()</code> → ... → <code>front()</code>(最旧) → L0 SSTable(时间倒序) → L1+ SSTable。</li>
+          <li><strong>Group Commit 状态</strong>：<code>group_leader_active_</code> 标记 leader，follower 等 <code>group_cv_</code>。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>Manifest + Version · 元数据管理</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/minikv/src/core/manifest.cpp">manifest.cpp</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/minikv/src/core/version.cpp">version.cpp</a></span>
+      </div>
+      <div class="block-body">
+        <p>Manifest 记录 SSTable 元数据变更日志，Version 是当前生效的 SSTable 集合快照。</p>
+        <ul>
+          <li><strong>Version</strong>：维护每层 SSTable 文件路径列表，提供 <code>addLevelFile / removeLevelFiles / getLevelFiles / nextFileNumber / shouldCompactL0 / shouldCompactLevel</code>。</li>
+          <li><strong>Manifest</strong>：追加写编辑日志（add file / remove file），重启时重放重建 Version。</li>
+          <li><strong>文件号</strong>：<code>nextFileNumber()</code> 单调递增，WAL 与 SSTable 共用编号空间。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>BlockCache + LRU + Compression</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/minikv/src/core/block_cache.h">block_cache.h</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/minikv/src/utils/lru_cache.h">utils/lru_cache.h</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/minikv/src/core/compression.cpp">compression.cpp</a></span>
+      </div>
+      <div class="block-body">
+        <p>读路径的优化三件套：块缓存降低重复读、LRU 淘汰、Snappy 压缩省盘。</p>
+        <ul>
+          <li><strong>BlockCache</strong>：按 (path, offset) 缓存解压后的 Block，<code>invalidatePath</code> 在 Compaction 删文件时清理。</li>
+          <li><strong>LRU</strong>：<code>utils/lru_cache.h</code>，哈希 + 双向链表，访问即移到头部，满时淘汰尾部。</li>
+          <li><strong>Compression</strong>：默认 <code>CompressionType::kSnappy</code>，SSTable 块写入时压缩，读时按 type 解压。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>原生网络层 · 主从 Reactor</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/minikv/src/network/server.h">minikv/src/network/server.h</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/minikv/src/network/event_loop.cpp">event_loop.cpp</a></span>
+      </div>
+      <div class="block-body">
+        <p>minikv 自带一个原生 TCP 服务（非 skynet），Go Data 通过 <code>MINIKV_ADDR</code> 直连。</p>
+        <ul>
+          <li><strong>主 Reactor</strong>：<code>loop_</code> 只负责 accept，新连接按 round-robin 分发到 Sub Reactor。</li>
+          <li><strong>Sub Reactor</strong>：<code>io_pool_</code>（<code>io_threads</code> 个 <code>EventLoopThread</code>）处理读写，默认 4 线程。</li>
+          <li><strong>业务线程池</strong>：<code>biz_pool_</code>（<code>biz_threads</code> 个）跑 <code>processRequest</code>，与 IO 解耦；<code>biz_threads=0</code> 时在 IO 线程内同步处理。</li>
+          <li><strong>API</strong>：<code>run() / stop() / port() / ioThreads() / bizThreads()</code>。</li>
+          <li><strong>对比</strong>：这是 minikv 的「教学版」网络层；项目对外的 :8080 前置是 skynet（C++20 协程）。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>utils · 基础设施</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/minikv/src/utils/coding.h">utils/</a></span>
+      </div>
+      <div class="block-body">
+        <ul>
+          <li><strong><code>coding.h</code></strong>：Fixed64 / Varint 编解码，InternalKey trailer 的小端字节序。</li>
+          <li><strong><code>crc32.cpp</code></strong>：CRC32 校验，SSTable 块头与 WAL 条目完整性。</li>
+          <li><strong><code>hash.h</code></strong>：<code>murmurHash2</code>，BloomFilter 双哈希源。</li>
+          <li><strong><code>lru_cache.h</code></strong>：模板化 LRU，BlockCache 底层。</li>
+          <li><strong><code>thread_pool.h</code></strong>：固定线程数 + 任务队列，业务池与 flush 池复用。</li>
+          <li><strong><code>env.h / env_posix.cpp</code></strong>：文件 IO 抽象，便于移植。</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>关键源码索引</h2>
+    <ul class="file-list">
+      <li><span class="fp">db_impl.h / .cpp</span><span class="fd">对外 DB 接口、Group Commit、后台 flush</span></li>
+      <li><span class="fp">wal.h / .cpp</span><span class="fd">追加写日志、回放恢复、轮转</span></li>
+      <li><span class="fp">skip_list.h</span><span class="fd">SkipList 模板，kMaxLevel=32，shared_mutex</span></li>
+      <li><span class="fp">memtable.cpp / _iterator.cpp</span><span class="fd">MemTable 封装跳表 + 迭代器</span></li>
+      <li><span class="fp">sstable_builder/reader/iterator</span><span class="fd">SSTable 构建、读取、合并迭代</span></li>
+      <li><span class="fp">block.h / block_cache.h</span><span class="fd">Block 构建器 + LRU 缓存</span></li>
+      <li><span class="fp">compaction.cpp</span><span class="fd">后台合并线程、L0/Ln 触发</span></li>
+      <li><span class="fp">internal_key.cpp</span><span class="fd">MVCC trailer 编码与比较</span></li>
+      <li><span class="fp">manifest.cpp / version.cpp</span><span class="fd">元数据日志 + 当前版本</span></li>
+      <li><span class="fp">bloom_filter.h</span><span class="fd">双 MurmurHash 布隆过滤器</span></li>
+      <li><span class="fp">compression.cpp</span><span class="fd">Snappy 压缩封装</span></li>
+      <li><span class="fp">network/server.cpp</span><span class="fd">主从 Reactor TCP 服务</span></li>
+    </ul>
+
+  
+    <h2 id="structure">详细目录结构</h2>
+    <p>存储引擎分三块：<code>include/minikv</code> 公开 API、<code>src/core</code> LSM 内核、<code>src/network</code> TCP 服务。</p>
+    <pre><code>minikv/
+├── include/minikv/
+│   ├── db.h              DB::open/put/get/del/write/newIterator
+│   ├── options.h         memtable_size, block_size, lru_cache_capacity
+│   ├── write_batch.h     原子批量写
+│   └── slice.h / status.h / iterator.h
+├── src/core/
+│   ├── db_impl.{h,cpp}   Group Commit + flush 队列 + recover
+│   ├── memtable.{h,cpp}  SkipList + shared_mutex
+│   ├── skip_list.h       跳表 (kMaxLevel=32, p=0.5)
+│   ├── wal.{h,cpp}       wal-&lt;N&gt;.log 分代日志
+│   ├── block_cache.h     解压后 data block LRU (path,offset)
+│   ├── sstable_builder/reader/iterator
+│   ├── compaction.{h,cpp}  L0→L1+ 后台合并
+│   ├── manifest.{h,cpp}  Version 持久化账本
+│   ├── version.{h,cpp}   各层 SST 文件列表
+│   ├── internal_key.{h,cpp}  MVCC [user_key|seq|type]
+│   ├── bloom_filter.h    每 SST 一份 .bloom
+│   └── compression.{h,cpp}  Snappy/Zstd
+├── src/network/
+│   ├── server.{h,cpp}    主从 Reactor (--io-threads/--biz-threads)
+│   ├── event_loop*       epoll LT + eventfd runInLoop
+│   ├── connection.{h,cpp} 粘包 + in_flight_ 串行
+│   └── protocol.h        MK TCP 二进制协议
+├── src/utils/            coding, crc32, hash, thread_pool
+├── src/main.cpp          minikv_server 入口 :8888
+└── tests/                17 个 GoogleTest 套件</code></pre>
+    <table class="kp">
+      <thead><tr><th>模块</th><th>默认/关键参数</th><th>职责</th></tr></thead>
+      <tbody>
+        <tr><td>DBImpl</td><td>write_mutex_ + group commit</td><td>写路径编排、recover、flush 调度</td></tr>
+        <tr><td>MemTable</td><td>shared_ptr, 4MB 触发 flush</td><td>锁内快照、锁外 Get/Iterator</td></tr>
+        <tr><td>BlockCache</td><td>8MB 默认</td><td>SST 读放大优化</td></tr>
+        <tr><td>Server</td><td>io=4, biz=4, LT</td><td>TCP 接入，与 skynet ET 区分</td></tr>
+      </tbody>
+    </table>
+
+  </main>
+</div>
+
+</body>
+</html>

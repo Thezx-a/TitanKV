@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>网关层 · Gateway · TitanKV</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand"><a href="index.html">TitanKV</a> <small>分层知识图谱</small></div>
+    <nav>
+      <a href="index.html#layers">分层总览</a>
+      <a href="index.html#flow">请求链路</a>
+      <a href="https://github.com/Thezx-a/TitanKV" target="_blank" rel="noopener">源码 ↗</a>
+    </nav>
+  </div>
+</header>
+
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="side-title">分层导航</div>
+    <ul class="side-list">
+      <li><a href="client.html"><span class="layer-num">L1</span>客户端层</a></li>
+      <li><a href="network.html"><span class="layer-num">L2</span>网络库 Skynet</a></li>
+      <li><a href="gateway.html" class="active"><span class="layer-num">L3</span>网关层</a></li>
+      <li><a href="services.html"><span class="layer-num">L4</span>微服务层</a></li>
+      <li><a href="distributed.html"><span class="layer-num">L5</span>分布式层</a></li>
+      <li><a href="storage.html"><span class="layer-num">L6</span>存储引擎</a></li>
+      <li><a href="observability.html"><span class="layer-num">L7</span>可观测性</a></li>
+      <li><a href="web.html"><span class="layer-num">L8</span>前端控制台</a></li>
+    </ul>
+    <a class="side-back" href="index.html">← 返回总览</a>
+  </aside>
+
+  <main class="content">
+
+    <div class="page-head">
+      <div class="crumb"><a href="index.html">总览</a><span class="sep">/</span>网关层</div>
+      <h1>API Gateway · Go + Gin</h1>
+      <p class="desc">
+        Gin 网关是请求进入业务域的第一道关卡：用洋葱模型串起 RequestID/Logger/Recover/RateLimit/Auth/RBAC，
+        再按前缀反向代理到各微服务。它从环境变量读配置，Redis 不可用时降级为无限制。
+      </p>
+      <div class="meta">
+        <span class="chip">Go 1.23</span>
+        <span class="chip">Gin</span>
+        <span class="chip">洋葱中间件</span>
+        <span class="chip">JWT + APIKey</span>
+        <span class="chip">RBAC</span>
+        <span class="chip">Redis 限流</span>
+        <span class="chip">优雅停机</span>
+      </div>
+    </div>
+
+    <h2>洋葱模型中间件链</h2>
+    <p>中间件按注册顺序包裹，外层先执行 <code>before</code>、内层先执行 <code>after</code>。顺序很关键：<code>Recover</code> 必须在 <code>Logger</code> 之后（Logger 才能记到 panic），<code>Auth</code> 必须在 <code>RBAC</code> 之前（先识别身份再判权限）。</p>
+
+    <div class="arch-diagram">请求 ──▶ RequestID  ──▶ Logger ──▶ Recover ──▶ RateLimit ──▶ Auth ──▶ RBAC ──▶ Handler
+                                                                              │          │
+                                                                              ▼          ▼
+                                                                       解析 JWT/APIKey    检查角色权限
+                                                                       (失败 401)        (失败 403)
+
+  内层 Handler 处理完 → 按洋葱倒序回弹 → RBAC.after → Auth.after → RateLimit.after → ... → RequestID.after
+  全程同一个 goroutine，RequestID 贯穿日志与追踪。</div>
+
+    <h2>核心组件知识点</h2>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>router.go · 路由注册与反向代理映射</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/gateway/router.go">gateway/router.go</a></span>
+      </div>
+      <div class="block-body">
+        <p>所有路由与中间件链在此编排，环境变量驱动配置。</p>
+        <ul>
+          <li><strong>Config</strong>：从环境变量读 <code>GATEWAY_ADDR / JWT_SECRET / REDIS_ADDR / *_SERVICE_URL</code>，<code>getenv()</code> 带默认值兜底。</li>
+          <li><strong>中间件链</strong>：<code>gin.Recovery()</code> + <code>metrics.GinMiddleware</code> + <code>RequestID→Logger→Recover→RateLimit</code>。</li>
+          <li><strong>无鉴权</strong>：<code>GET /ping</code>、<code>GET /healthz</code>、<code>POST /api/auth/{register,login}</code>。</li>
+          <li><strong>鉴权组</strong>：<code>POST /api/auth/{refresh,logout,apikey}</code>，apikey 还需 <code>apikey:issue</code> 权限。</li>
+          <li><strong>反向代理 map</strong>：<code>/api/data → :8081</code>、<code>/api/meta → :8083</code>、<code>/api/observability → :8084</code>、<code>/api/rag → :8085</code>。</li>
+          <li><strong>RBAC 分流</strong>：data/meta/observability 按方法映射 KV 权限；rag 区分 <code>retrieve/chat=rag:query</code> 与其他写=rag:ingest。</li>
+          <li><strong>优雅停机</strong>：<code>SIGINT/SIGTERM</code> → <code>srv.Shutdown(5s)</code>。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>Auth · JWT + APIKey 双轨</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/gateway/middleware/auth.go">gateway/middleware/auth.go</a></span>
+      </div>
+      <div class="block-body">
+        <p>识别「你是谁」：优先 Bearer JWT，其次 X-API-Key。失败统一 401。</p>
+        <pre><code>// 优先级
+1) Authorization: Bearer &lt;jwt&gt;   → parseJWT → 检查 jti 黑名单
+2) X-API-Key: &lt;key&gt;              → 调 Auth 服务 VerifyAPIKey
+3) 都没有 → 401 unauthorized</code></pre>
+        <ul>
+          <li><strong>alg:none 防御</strong>：<code>parseJWT</code> 强制 <code>SigningMethodHMAC</code>，拒绝 alg:none 伪造攻击。</li>
+          <li><strong>jti 黑名单</strong>：登出时把 jti 写入 Redis <code>revoked:jti:&lt;id&gt;</code>，TTL = token 剩余有效期。</li>
+          <li><strong>Redis 故障放行</strong>：<code>isRevoked</code> 查询失败时返回 false，避免 Redis 抖动阻断全部请求。</li>
+          <li><strong>上下文注入</strong>：<code>c.Set("user_id" / "role" / "auth_method")</code> 给后续中间件。</li>
+          <li><strong>APIKey 哈希</strong>：<code>HashAPIKey</code> 服务端只存 SHA256，DB 泄露不暴露原 Key。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>RBAC · 角色权限矩阵</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/gateway/middleware/rbac.go">gateway/middleware/rbac.go</a></span>
+      </div>
+      <div class="block-body">
+        <p>判断「你能干啥」：基于角色的权限控制，权限命名规范 <code>resource:action</code>。</p>
+        <table class="kp">
+          <thead><tr><th>权限</th><th>admin</th><th>writer</th><th>reader</th></tr></thead>
+          <tbody>
+            <tr><td><code>kv:get</code></td><td>✓</td><td>✓</td><td>✓</td></tr>
+            <tr><td><code>kv:put</code></td><td>✓</td><td>✓</td><td>—</td></tr>
+            <tr><td><code>kv:delete</code></td><td>✓</td><td>—</td><td>—</td></tr>
+            <tr><td><code>collection:create</code></td><td>✓</td><td>✓</td><td>—</td></tr>
+            <tr><td><code>collection:delete</code></td><td>✓</td><td>—</td><td>—</td></tr>
+            <tr><td><code>user:manage</code></td><td>✓</td><td>—</td><td>—</td></tr>
+            <tr><td><code>apikey:issue</code></td><td>✓</td><td>—</td><td>—</td></tr>
+            <tr><td><code>rag:ingest</code></td><td>✓</td><td>✓</td><td>—</td></tr>
+            <tr><td><code>rag:query</code></td><td>✓</td><td>✓</td><td>✓</td></tr>
+          </tbody>
+        </table>
+        <ul>
+          <li><strong>失败 403</strong>：返回 <code>required</code> 与当前 <code>role</code>，便于排查。</li>
+          <li><strong>细粒度方法映射</strong>：data 路由组按 HTTP 方法映射 <code>GET=kv:get / POST|PUT=kv:put / DELETE=kv:delete</code>。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>ReverseProxy · 前缀路由 + 身份注入</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/gateway/handler/proxy.go">gateway/handler/proxy.go</a></span>
+      </div>
+      <div class="block-body">
+        <p>基于 <code>httputil.NewSingleHostReverseProxy</code> 封装，按前缀选目标，并注入身份头。</p>
+        <ul>
+          <li><strong>targets map</strong>：<code>prefix → *url.URL</code>，启动时解析一次。</li>
+          <li><strong>身份透传</strong>：转发前注入 <code>X-User-ID / X-Role / X-Request-ID</code>，后端服务拿到身份无需再解 JWT。</li>
+          <li><strong>404 兜底</strong>：无匹配前缀返回 <code>no upstream for path</code>。</li>
+          <li><strong>扩展</strong>：生产可换为基于 etcd 的动态服务发现。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>其余中间件</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/gateway/middleware/">gateway/middleware/</a></span>
+      </div>
+      <div class="block-body">
+        <ul>
+          <li><strong>RequestID</strong>：每请求生成唯一 ID，写入 <code>X-Request-ID</code> 头与日志，串联全链路追踪。</li>
+          <li><strong>Logger</strong>：结构化记录请求方法/路径/状态/耗时。</li>
+          <li><strong>Recover</strong>：捕获 panic，记日志后返回 500，不让进程崩。</li>
+          <li><strong>RateLimit</strong>：Redis 令牌桶，<code>burst=100, sustained=10/s</code>；Redis 不可用时直接不启用（降级）。</li>
+          <li><strong>shard.go</strong>：分片逻辑占位，配合分布式层使用。</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>路由全景表</h2>
+    <table class="kp">
+      <thead><tr><th>方法</th><th>路径</th><th>鉴权</th><th>转发 / 处理</th></tr></thead>
+      <tbody>
+        <tr><td>GET</td><td><code>/ping</code></td><td>无</td><td>handler.Ping</td></tr>
+        <tr><td>GET</td><td><code>/healthz</code></td><td>无</td><td>K8s probe</td></tr>
+        <tr><td>POST</td><td><code>/api/auth/register</code></td><td>无</td><td>Auth 服务</td></tr>
+        <tr><td>POST</td><td><code>/api/auth/login</code></td><td>无</td><td>Auth 服务</td></tr>
+        <tr><td>POST</td><td><code>/api/auth/refresh</code></td><td>JWT</td><td>Auth 服务</td></tr>
+        <tr><td>POST</td><td><code>/api/auth/logout</code></td><td>JWT</td><td>Auth 服务（吊销 jti）</td></tr>
+        <tr><td>POST</td><td><code>/api/auth/apikey</code></td><td>JWT + apikey:issue</td><td>Auth 服务</td></tr>
+        <tr><td>*</td><td><code>/api/data/*</code></td><td>JWT + kv:*</td><td>Data :8081</td></tr>
+        <tr><td>*</td><td><code>/api/meta/*</code></td><td>JWT + kv:*</td><td>Meta :8083</td></tr>
+        <tr><td>*</td><td><code>/api/observability/*</code></td><td>JWT + kv:*</td><td>Observability :8084</td></tr>
+        <tr><td>*</td><td><code>/api/rag/*</code></td><td>JWT + rag:ingest/query</td><td>RAG :8085</td></tr>
+      </tbody>
+    </table>
+
+    <h2>关键源码索引</h2>
+    <ul class="file-list">
+      <li><span class="fp">cmd/main.go</span><span class="fd">网关启动入口</span></li>
+      <li><span class="fp">router.go</span><span class="fd">路由编排 + 反向代理 map + 优雅停机</span></li>
+      <li><span class="fp">shard.go</span><span class="fd">分片逻辑占位</span></li>
+      <li><span class="fp">handler/ping.go · proxy.go</span><span class="fd">健康检查 + 反向代理</span></li>
+      <li><span class="fp">middleware/request_id.go · logger.go · recover.go · ratelimit.go · auth.go · rbac.go</span><span class="fd">洋葱模型六件套</span></li>
+    </ul>
+
+  
+    <h2 id="structure">详细目录结构</h2>
+    <pre><code>gateway/
+├── router.go           Config + 中间件链 + 反向代理 map + Run()
+├── handler/
+│   ├── ping.go         GET /ping, /healthz
+│   └── proxy.go        ReverseProxy + 身份头注入
+└── middleware/
+    ├── request_id.go
+    ├── logger.go
+    ├── recover.go      Gin panic → 500
+    ├── ratelimit.go    Redis Lua 令牌桶
+    ├── auth.go         JWT + APIKey + jti 黑名单
+    └── rbac.go         kv:* / rag:ingest / rag:query
+
+cmd/gateway/main.go   → gateway.Run()
+
+环境变量:
+  GATEWAY_ADDR=:18080 (run-all)
+  *_SERVICE_URL → Auth/Data/Meta/Observ/RAG
+  REDIS_ADDR, JWT_SECRET</code></pre>
+
+  </main>
+</div>
+
+</body>
+</html>

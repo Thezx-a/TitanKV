@@ -1,6 +1,6 @@
 # Module 04 — Go 与 TypeScript 基础
 
-> 对应规划：[go.mod](file:///c:/Users/Administrator/Desktop/hellocpp/go.mod)（`github.com/titan-kv/titan`）、REFACTORING.md Phase 3-6（gateway/services/web）
+> 对应规划：[go.mod](../../../go.mod)（`github.com/titan-kv/titan`）、REFACTORING.md Phase 3-6（gateway/services/web）
 
 ## 背景与动机
 
@@ -23,7 +23,7 @@
 
 ### 2.1 为什么 TitanKV 用 Go 做业务层
 
-架构分工（来自 [README.md](file:///c:/Users/Administrator/Desktop/hellocpp/README.md)）：
+架构分工（来自 [README.md](../../../README.md)）：
 
 - **C++ 存储引擎**（minikv）：追求极致性能，零开销、内存可控。
 - **Go 微服务**（gateway/services）：追求开发效率与并发表达力，gRPC 串联。
@@ -242,7 +242,7 @@ func readFile(path string) error {
 
 ### 2.8 Go 包管理、`panic`/`recover`、`sync` 补遗
 
-**包管理**用 `go mod`，TitanKV 的 [go.mod](file:///c:/Users/Administrator/Desktop/hellocpp/go.mod) 声明模块路径 `github.com/titan-kv/titan`：
+**包管理**用 `go mod`，TitanKV 的 [go.mod](../../../go.mod) 声明模块路径 `github.com/titan-kv/titan`：
 
 ```
 module github.com/titan-kv/titan

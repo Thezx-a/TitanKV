@@ -1,6 +1,6 @@
 # Module 09 — epoll 与 C++20 协程
 
-> 对应源码：[io_context.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/net/io_context.h)、[task.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/core/task.h)、[executor.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/core/executor.h)、[socket.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/net/socket.h)
+> 对应源码：[io_context.h](../../../skynet/include/skynet/net/io_context.h)、[task.h](../../../skynet/include/skynet/core/task.h)、[executor.h](../../../skynet/include/skynet/core/executor.h)、[socket.h](../../../skynet/include/skynet/net/socket.h)
 
 ## 背景与动机
 
@@ -40,7 +40,7 @@ epoll 高效原因：
 
 ### 2.2 minikv 的 IOContext
 
-[io_context.h:10-25](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/net/io_context.h) 封装 epoll：
+[io_context.h:10-25](../../../skynet/include/skynet/net/io_context.h) 封装 epoll：
 
 ```cpp
 class IOContext {
@@ -83,9 +83,11 @@ ET 模式注意点：
 
 **仓库现状（minikv_server）**：Main 只 accept，Sub 做连接 IO（默认 `--io-threads 4`），epoll **LT**（只挂 `EPOLLIN`）；`db_` 在业务池（默认 `--biz-threads 4`）跑，写回 `queueInLoop` 到所属 Sub。skynet 仍是 **ET + 协程**，两条线不要混。
 
+**仓库现状（skynet_gateway 前置）**：Main 只跑 accept 协程；Sub（`gateway.yaml` `listen.threads`，默认 4）各自 `IOContext` + epoll **ET**，`co_await` 读写完整 HTTP 后 LB 转发到 Gin `:18080`。不是阻塞线程池模型。
+
 关键组件：EventLoop（IOContext）、Channel（fd+事件+回调）、Acceptor、TcpConnection、ThreadPool。
 
-skynet 的 `Executor`（[executor.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/core/executor.h)）即 EventLoop + 协程调度器。
+skynet 的 `Executor`（[executor.h](../../../skynet/include/skynet/core/executor.h)）即 EventLoop + 协程调度器。
 
 #### 主从 Reactor 多线程架构
 
@@ -143,7 +145,7 @@ C++20 协程是**无栈协程**（Stackless）：
 
 ### 2.6 Task 类型与 promise_type
 
-[task.h:22-34](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/core/task.h) 实现 `promise_type`：
+[task.h:22-34](../../../skynet/include/skynet/core/task.h) 实现 `promise_type`：
 
 ```cpp
 struct promise_type {
@@ -176,7 +178,7 @@ struct promise_type {
 2. 若 false，调 `expr.await_suspend(handle)`：可返回 void（挂起）/ bool（true 挂起 false 恢复）/ `coroutine_handle`（对称转移到另一协程）。
 3. 恢复时调 `expr.await_resume()` 返回结果。
 
-[task.h:49-57](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/core/task.h) 的 Task 本身也是 Awaiter：
+[task.h:49-57](../../../skynet/include/skynet/core/task.h) 的 Task 本身也是 Awaiter：
 
 ```cpp
 bool await_ready() const { return false; }
@@ -240,11 +242,11 @@ skynet::Task<int> handle_client(TcpStream stream) {
 
 ### 题 4.1（手撕 epoll ET 回显服务器）
 
-参考 [io_context.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/net/io_context.h)，用 epoll ET 实现一个回显服务器：listenfd 和 clientfd 都设 `O_NONBLOCK`，注册 `EPOLLIN | EPOLLET`，accept 循环到 EAGAIN，read 循环到 EAGAIN。用 `ab` 或 `wrk` 压测。
+参考 [io_context.h](../../../skynet/include/skynet/net/io_context.h)，用 epoll ET 实现一个回显服务器：listenfd 和 clientfd 都设 `O_NONBLOCK`，注册 `EPOLLIN | EPOLLET`，accept 循环到 EAGAIN，read 循环到 EAGAIN。用 `ab` 或 `wrk` 压测。
 
 ### 题 4.2（手写最小 Task）
 
-参考 [task.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/core/task.h)，实现一个最小 `Task<T>`：支持 `co_return`、`co_await`、异常传播、惰性启动。写测试：`Task<int> f() { co_return 42; }`，`auto v = co_await f();` 验证 v==42。
+参考 [task.h](../../../skynet/include/skynet/core/task.h)，实现一个最小 `Task<T>`：支持 `co_return`、`co_await`、异常传播、惰性启动。写测试：`Task<int> f() { co_return 42; }`，`auto v = co_await f();` 验证 v==42。
 
 ### 题 4.3（协程化 TCP 读）
 

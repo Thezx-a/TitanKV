@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>微服务层 · Services · TitanKV</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand"><a href="index.html">TitanKV</a> <small>分层知识图谱</small></div>
+    <nav>
+      <a href="index.html#layers">分层总览</a>
+      <a href="index.html#flow">请求链路</a>
+      <a href="https://github.com/Thezx-a/TitanKV" target="_blank" rel="noopener">源码 ↗</a>
+    </nav>
+  </div>
+</header>
+
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="side-title">分层导航</div>
+    <ul class="side-list">
+      <li><a href="client.html"><span class="layer-num">L1</span>客户端层</a></li>
+      <li><a href="network.html"><span class="layer-num">L2</span>网络库 Skynet</a></li>
+      <li><a href="gateway.html"><span class="layer-num">L3</span>网关层</a></li>
+      <li><a href="services.html" class="active"><span class="layer-num">L4</span>微服务层</a></li>
+      <li><a href="distributed.html"><span class="layer-num">L5</span>分布式层</a></li>
+      <li><a href="storage.html"><span class="layer-num">L6</span>存储引擎</a></li>
+      <li><a href="observability.html"><span class="layer-num">L7</span>可观测性</a></li>
+      <li><a href="web.html"><span class="layer-num">L8</span>前端控制台</a></li>
+    </ul>
+    <a class="side-back" href="index.html">← 返回总览</a>
+  </aside>
+
+  <main class="content">
+
+    <div class="page-head">
+      <div class="crumb"><a href="index.html">总览</a><span class="sep">/</span>微服务层</div>
+      <h1>Services · Go 微服务</h1>
+      <p class="desc">
+        五个独立可部署的 Go 微服务：Auth（鉴权）、Data（KV 读写）、Meta（Schema）、
+        Observability（指标聚合）、RAG（检索增强生成）。每个服务自带 <code>cmd/main.go</code> 入口，
+        端口分离，可独立替换。
+      </p>
+      <div class="meta">
+        <span class="chip">Go 1.23</span>
+        <span class="chip">Auth :8082</span>
+        <span class="chip">Data :8081</span>
+        <span class="chip">Meta :8083</span>
+        <span class="chip">Observ :8084</span>
+        <span class="chip">RAG :8085</span>
+      </div>
+    </div>
+
+    <h2>服务全景</h2>
+    <table class="kp">
+      <thead><tr><th>服务</th><th>端口</th><th>职责</th><th>关键依赖</th></tr></thead>
+      <tbody>
+        <tr><td>Auth</td><td>8082</td><td>JWT 签发/刷新、RBAC、APIKey 签发、bcrypt 密码</td><td>Redis（jti 黑名单）</td></tr>
+        <tr><td>Data</td><td>8081</td><td>KV 读写、Collection 管理</td><td>minikv_server（MINIKV_ADDR）</td></tr>
+        <tr><td>Meta</td><td>8083</td><td>Schema / 元数据、watcher 变更监听</td><td>—</td></tr>
+        <tr><td>Observability</td><td>8084</td><td>指标聚合、scraper 周期采集</td><td>Prometheus /metrics</td></tr>
+        <tr><td>RAG</td><td>8085</td><td>文档入库 → 检索 → 重排 → LLM → 流式问答</td><td>HNSW / LLM API</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Auth 服务知识点</h2>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>JWTManager · Access + Refresh 双 Token</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/services/auth/jwt.go">services/auth/jwt.go</a></span>
+      </div>
+      <div class="block-body">
+        <ul>
+          <li><strong>Access Token</strong>：短期 30min，携带 <code>user_id / role / jti</code>。</li>
+          <li><strong>Refresh Token</strong>：长期 7d，<strong>不带 role</strong>——刷新时重新查角色，避免角色变更后 Refresh 仍带旧角色。</li>
+          <li><strong>jti</strong>：<code>uuid.NewString()</code>，唯一 ID 用于吊销。</li>
+          <li><strong>签名</strong>：<code>HS256</code>，<code>Parse</code> 强制 <code>SigningMethodHMAC</code>，拒绝 alg:none。</li>
+          <li><strong>TTL 暴露</strong>：<code>AccessTTL() / RefreshTTL()</code> 给 Redis 设过期时使用。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>password · bcrypt 密码哈希</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/services/auth/password.go">services/auth/password.go</a></span>
+      </div>
+      <div class="block-body">
+        <p>用 bcrypt 做密码哈希，自带盐与可调成本因子，抗暴力破解与彩虹表。</p>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>apikey · 服务端只存 SHA256</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/services/auth/apikey.go">services/auth/apikey.go</a></span>
+      </div>
+      <div class="block-body">
+        <p>APIKey 签发后只在 DB 存 SHA256(key)；校验时对入参做 SHA256 比对，DB 泄露也无法还原原 Key。</p>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>rbac.go · 角色权限定义</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/services/auth/rbac.go">services/auth/rbac.go</a></span>
+      </div>
+      <div class="block-body">
+        <p>权限命名 <code>resource:action</code>（<code>kv:get / kv:put / rag:ingest</code>），与网关 <code>middleware/rbac.go</code> 对齐。</p>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>store.go · 用户持久化</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/services/auth/store.go">services/auth/store.go</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/services/auth/client.go">client.go</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/services/auth/handler.go">handler.go</a></span>
+      </div>
+      <div class="block-body">
+        <p>用户表存储 + Gateway 调用 Auth 的 HTTP client（注册/登录/刷新/登出/apikey Handler）。</p>
+      </div>
+    </div>
+
+    <h2>Data 服务知识点</h2>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>minikv_client · 原生 TCP 接入 LSM</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/services/data/minikv_client.go">services/data/minikv_client.go</a></span>
+      </div>
+      <div class="block-body">
+        <p>Phase 2 的 MVP：Data 通过环境变量 <code>MINIKV_ADDR</code> 直连 minikv_server 原生 TCP 协议，把 KV 持久化到 LSM-Tree。</p>
+        <ul>
+          <li><strong>无 MINIKV_ADDR 时</strong>：回退到内存 store，方便本地快速跑通。</li>
+          <li><strong>规划中的 gRPC/cgo</strong>：后续可换为 gRPC server 包 minikv，仍待实现。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>store.go + handler.go</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/services/data/store.go">store.go</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/services/data/handler.go">handler.go</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/services/data/store_test.go">store_test.go</a></span>
+      </div>
+      <div class="block-body">
+        <p>KV 读写 HTTP Handler + 存储抽象（minikv / 内存回退）+ 单元测试。</p>
+      </div>
+    </div>
+
+    <h2>Meta 服务知识点</h2>
+    <div class="block">
+      <div class="block-head">
+        <h3>Schema 元数据 + watcher</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/services/meta/store.go">meta/store.go</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/services/meta/watcher.go">watcher.go</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/services/meta/handler.go">handler.go</a></span>
+      </div>
+      <div class="block-body">
+        <p>管理 Collection Schema 与元数据，<code>watcher</code> 监听元数据变更事件，供其他服务订阅。</p>
+      </div>
+    </div>
+
+    <h2>Observability 服务知识点</h2>
+    <div class="block">
+      <div class="block-head">
+        <h3>metrics + scraper</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/services/observability/metrics.go">metrics.go</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/services/observability/scraper.go">scraper.go</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/services/observability/handler.go">handler.go</a></span>
+      </div>
+      <div class="block-body">
+        <p>聚合各服务指标，<code>scraper</code> 周期采集，<code>handler</code> 暴露给 Prometheus 抓取。详见 <a href="observability.html">可观测性层</a>。</p>
+      </div>
+    </div>
+
+    <h2>RAG 服务 · 检索增强生成全链路</h2>
+    <p>RAG 是本层最复杂的服务，从文档入库到流式问答一条龙。流程：<code>ingest → chunker → embedding → hnsw_index → retrieve → rerank → llm → chat(SSE)</code>。</p>
+
+    <div class="arch-diagram">入库 (rag:ingest):
+  Document ──▶ chunker (分块) ──▶ embedding (向量化) ──▶ hnsw_index.Add() ──▶ store
+
+查询 (rag:query):
+  Query ──▶ embedding ──▶ hnsw_index.TopK(k) ──▶ retrieve (取 chunk) ──▶ rerank
+                                                              │
+                                                              ▼
+                                                         llm (prompt 拼装)
+                                                              │
+                                                              ▼
+                                                         chat (SSE 流式输出)</div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>HNSWIndex · 分层小世界图</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/services/rag/hnsw_index.go">services/rag/hnsw_index.go</a></span>
+      </div>
+      <div class="block-body">
+        <p>近似最近邻搜索（ANN）的工业级算法。本项目实现了一个简化版 HNSW，接口与暴力 SideIndex 兼容，便于在 N 增长时无缝切换。</p>
+        <ul>
+          <li><strong>参数</strong>：<code>m = 16</code>（每层最大邻居数）、<code>ml = 1/log(16)</code>（层高分布系数）。</li>
+          <li><strong>随机层</strong>：<code>randomLayer()</code> 以 0.5 概率递增，封顶 8 层。</li>
+          <li><strong>插入 Add()</strong>：从顶层 <code>greedyClosest</code> 下降 → 在目标层 <code>searchLayer(ef=m*2)</code> 选邻居 → 双向连边。</li>
+          <li><strong>查询 TopK()</strong>：顶层贪心下降 → 底层 <code>searchLayerLocked(ef=k*4)</code> 取候选 → 返回 TopK Hit（按余弦相似度排序）。</li>
+          <li><strong>searchLayer</strong>：候选集 + 已访问集合，<code>ef</code> 控制精度，超限时按相似度裁剪。</li>
+          <li><strong>相似度</strong>：<code>cosine(query, vec)</code> 余弦相似度。</li>
+          <li><strong>持久化</strong>：<code>SaveSnapshot / SaveSnapshotPrefix / MergeSnapshot</code>，JSON 存向量。</li>
+          <li><strong>按前缀清空</strong>：<code>ClearByPrefix</code> 支持 Collection 级删除。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>VectorIndex 抽象 + SideIndex</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/services/rag/vector_index.go">vector_index.go</a></span>
+      </div>
+      <div class="block-body">
+        <p><code>VectorIndex</code> 接口抽象了 HNSW 与暴力 SideIndex，<code>NewVectorIndex(dim, "hnsw")</code> 按环境变量 <code>RAG_INDEX_TYPE</code> 选择实现。</p>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>chunker / embedding / rerank / llm</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/services/rag/chunker.go">chunker.go</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/services/rag/embedding.go">embedding.go</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/services/rag/rerank.go">rerank.go</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/services/rag/llm.go">llm.go</a></span>
+      </div>
+      <div class="block-body">
+        <ul>
+          <li><strong>chunker</strong>：文档分块（按字符/段落滑窗）。</li>
+          <li><strong>embedding</strong>：文本 → 向量，封装 embedding 模型 API。</li>
+          <li><strong>rerank</strong>：对 TopK 候选重排，提升相关性。</li>
+          <li><strong>llm</strong>：拼装 prompt 调大模型，返回生成文本。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>retrieve / ingest / chat / store</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/services/rag/retrieve.go">retrieve.go</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/services/rag/ingest.go">ingest.go</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/services/rag/chat.go">chat.go</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/services/rag/store.go">store.go</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/services/rag/eval.go">eval.go</a></span>
+      </div>
+      <div class="block-body">
+        <ul>
+          <li><strong>retrieve</strong>：从向量库取相关 chunk。</li>
+          <li><strong>ingest</strong>：入库主流程，串起 chunker → embedding → index。</li>
+          <li><strong>chat</strong>：多轮对话 + 知识问答，<strong>SSE 流式输出</strong>。</li>
+          <li><strong>store</strong>：文档与向量索引存储层。</li>
+          <li><strong>eval</strong>：检索质量评测，<code>eval_test.go</code>。</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>关键源码索引</h2>
+    <ul class="file-list">
+      <li><span class="fp">services/auth/</span><span class="fd">jwt.go / rbac.go / password.go / apikey.go / store.go / client.go / handler.go</span></li>
+      <li><span class="fp">services/data/</span><span class="fd">minikv_client.go / store.go / handler.go / store_test.go</span></li>
+      <li><span class="fp">services/meta/</span><span class="fd">store.go / watcher.go / handler.go</span></li>
+      <li><span class="fp">services/observability/</span><span class="fd">metrics.go / scraper.go / handler.go</span></li>
+      <li><span class="fp">services/rag/</span><span class="fd">hnsw_index.go / vector_index.go / chunker.go / embedding.go / rerank.go / llm.go / retrieve.go / ingest.go / chat.go / store.go / eval.go / config.go</span></li>
+      <li><span class="fp">cmd/{auth,data,meta,observability,raft}/main.go</span><span class="fd">各服务入口</span></li>
+      <li><span class="fp">client-go/titan/client.go</span><span class="fd">Go SDK 客户端</span></li>
+    </ul>
+
+  
+    <h2 id="structure">详细目录结构</h2>
+    <pre><code>services/
+├── auth/
+│   ├── jwt.go / password.go / apikey.go / rbac.go
+│   ├── store.go / handler.go / client.go
+│   └── cmd/main.go          :8082
+├── data/
+│   ├── minikv_client.go     TCP → minikv_server
+│   ├── store.go / handler.go
+│   └── cmd/main.go          :8081
+├── meta/
+│   ├── store.go             Collection + type=rag + RagConfig
+│   └── cmd/main.go          :8083
+├── observability/
+│   ├── metrics.go / scraper.go
+│   └── cmd/main.go          :8084
+└── rag/
+    ├── config.go            RAG_ADDR :8085, MINIKV_ADDR, HNSW/brute
+    ├── store.go             minikv key 空间 + MiniKVClient
+    ├── ingest.go / chunker.go / embedding.go
+    ├── vector_index.go / hnsw_index.go
+    ├── retrieve.go / rerank.go
+    ├── chat.go / llm.go / handler.go
+    └── cmd/main.go          :8085</code></pre>
+    <h3>RAG 服务内部模块</h3>
+    <table class="kp">
+      <thead><tr><th>文件</th><th>职责</th></tr></thead>
+      <tbody>
+        <tr><td>ingest.go</td><td>文档上传 → 切块 → embed → WriteBatch 写 minikv → 更新 side index</td></tr>
+        <tr><td>hnsw_index.go</td><td>默认向量索引 (RAG_INDEX_TYPE=hnsw)</td></tr>
+        <tr><td>retrieve.go</td><td>query embed → TopK → 回查 chunk 文本</td></tr>
+        <tr><td>chat.go</td><td>retrieve → prompt → LLM SSE 流式</td></tr>
+      </tbody>
+    </table>
+
+  </main>
+</div>
+
+</body>
+</html>

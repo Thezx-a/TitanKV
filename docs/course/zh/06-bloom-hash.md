@@ -1,6 +1,6 @@
 # Module 06 — 布隆过滤器与哈希
 
-> 对应源码：[bloom_filter.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/bloom_filter.h)、[hash.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/hash.h)
+> 对应源码：[bloom_filter.h](../../../minikv/src/core/bloom_filter.h)、[hash.h](../../../minikv/src/utils/hash.h)
 > 对应规划：分布式层一致性哈希分片（REFACTORING.md Phase 5）
 
 ## 背景与动机
@@ -62,7 +62,7 @@ flowchart LR
 
 ### 2.2 minikv BloomFilter 构造
 
-[bloom_filter.h:17-26](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/bloom_filter.h)：
+[bloom_filter.h:17-26](../../../minikv/src/core/bloom_filter.h)：
 
 ```cpp
 BloomFilter(size_t expected_keys, double false_positive_rate = 0.01) {
@@ -86,7 +86,7 @@ minikv 把 `num_hashes_` 上限设 30，避免极端参数下哈希次数过多�
 
 ### 2.3 双哈希优化
 
-[bloom_filter.h:28-36](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/bloom_filter.h)：
+[bloom_filter.h:28-36](../../../minikv/src/core/bloom_filter.h)：
 
 ```cpp
 void add(const Slice& key) {
@@ -104,11 +104,11 @@ void add(const Slice& key) {
 - 好处：只需算 2 次哈希（而非 k 次），CPU 开销大减。
 - `pos / 8` 定位字节，`1 << (pos % 8)` 定位位；`|=` 置位。
 
-`mightContain`（[bloom_filter.h:38-47](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/bloom_filter.h)）逻辑对称：任一位为 0 立即返回 false，全 1 返回 true。
+`mightContain`（[bloom_filter.h:38-47](../../../minikv/src/core/bloom_filter.h)）逻辑对称：任一位为 0 立即返回 false，全 1 返回 true。
 
 ### 2.4 MurmurHash2
 
-[hash.h:8-30](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/hash.h) 实现了 MurmurHash2：
+[hash.h:8-30](../../../minikv/src/utils/hash.h) 实现了 MurmurHash2：
 
 ```cpp
 inline uint32_t murmurHash2(const char* data, size_t len, uint32_t seed) {
@@ -129,7 +129,7 @@ inline uint32_t murmurHash2(const char* data, size_t len, uint32_t seed) {
 
 ### 2.5 持久化与加载
 
-[bloom_filter.h:49-72](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/bloom_filter.h)：BF 随 SSTable 落盘，格式为 `[num_hashes(4)][bits_per_key(4)][size(8)][bits...]`。`load` 用 `unique_ptr` 返回，失败返回 nullptr——RAII + 显式错误。
+[bloom_filter.h:49-72](../../../minikv/src/core/bloom_filter.h)：BF 随 SSTable 落盘，格式为 `[num_hashes(4)][bits_per_key(4)][size(8)][bits...]`。`load` 用 `unique_ptr` 返回，失败返回 nullptr——RAII + 显式错误。
 
 ### 2.6 一致性哈希（分布式层铺垫）
 

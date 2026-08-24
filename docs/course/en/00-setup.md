@@ -1,6 +1,6 @@
 # Module 00 — Cross-Platform Environment Setup
 
-> Source: top-level [CMakeLists.txt](file:///c:/Users/Administrator/Desktop/hellocpp/CMakeLists.txt), [Makefile](file:///c:/Users/Administrator/Desktop/hellocpp/Makefile), [go.mod](file:///c:/Users/Administrator/Desktop/hellocpp/go.mod), [web/package.json](file:///c:/Users/Administrator/Desktop/hellocpp/web/package.json), [deploy/dev/docker-compose.yml](file:///c:/Users/Administrator/Desktop/hellocpp/deploy/dev/docker-compose.yml)
+> Source: top-level [CMakeLists.txt](../../../CMakeLists.txt), [Makefile](../../../Makefile), [go.mod](../../../go.mod), [web/package.json](../../../web/package.json), [deploy/dev/docker-compose.yml](../../../deploy/dev/docker-compose.yml)
 
 ## 1. Why Set Up the Environment First
 
@@ -147,7 +147,7 @@ Once WSL2 is installed, we want to open the project directory inside WSL2 direct
 
 ```bash
 # Run in the WSL2 terminal
-cd /mnt/c/Users/Administrator/Desktop/hellocpp
+cd /mnt/d/SpectrumCore
 code .
 ```
 
@@ -161,8 +161,8 @@ The one caveat is filesystem performance: **project source is best placed in WSL
 
 ```bash
 # In WSL2, symlink the Windows project directory to home
-ln -s /mnt/c/Users/Administrator/Desktop/hellocpp ~/hellocpp
-cd ~/hellocpp
+ln -s /mnt/d/SpectrumCore ~/titan-kv
+cd ~/titan-kv
 ```
 
 This way `git` operations and `cmake` builds are much faster.
@@ -1693,7 +1693,7 @@ With the environment set up, we'll now actually run the project and understand t
 - Compile `gateway` and `services` with `go build`, and start the Go microservices;
 - Start the Next.js console with `npm run dev`;
 - Bring up the local dependency stack with `docker compose up`;
-- Read through [README.md](file:///c:/Users/Administrator/Desktop/hellocpp/README.md) and [docs/REFACTORING.md](file:///c:/Users/Administrator/Desktop/hellocpp/docs/REFACTORING.md) to understand TitanKV's 9-phase refactoring roadmap.
+- Read through [README.md](../../../README.md) and [docs/REFACTORING.md](../../../docs/REFACTORING.md) to understand TitanKV's 9-phase refactoring roadmap.
 
 Remember: **an all-green environment verification script is your ticket into Module 01.** If any red `[✗]` remains, go back to the relevant section and fix it before continuing.
 

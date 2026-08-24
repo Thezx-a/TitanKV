@@ -39,7 +39,7 @@ Every module follows a unified structure: **Background & Motivation → Core Kno
 | 08 | Compaction 与 MVCC / Compaction & MVCC | 存储引擎 / Storage Engine | 4 存储引擎 / Storage Engine | `minikv/src/core/{compaction,internal_key,manifest}.cpp` | ✅ 已完成 / Done |
 | 09 | epoll 与 C++20 协程 / epoll & C++20 Coroutines | 网络 / Networking | 5 网络 / Networking | `skynet/src/net/` / `skynet/src/core/` | ✅ 已完成 / Done |
 | 10 | HTTP 与反向代理 / HTTP & Reverse Proxy | 网络 / Networking | 5 网络 / Networking | `skynet/src/http/` / `skynet/src/proxy/` | ✅ 已完成 / Done |
-| 11 | Raft 共识与分片 / Raft & Sharding | 分布式 / Distributed | 6 分布式 / Distributed | `distributed/` (planned) / `services/meta/watcher.go` | 🚧 进行中 / In progress |
+| 11 | Raft 共识与分片 / Raft & Sharding | 分布式 / Distributed | 6 分布式 / Distributed | `distributed/` / `cmd/raft` / `services/meta/watcher.go` | 🚧 进行中 / In progress |
 | 12 | Go 微服务与 Next.js 控制台 / Go µServices & Next.js | 应用 / Application | 7 应用 / Application | `services/` / `gateway/` / `web/` | ✅ 已完成 / Done |
 | 13 | 系统设计与面试题汇总 / System Design & Interview Q&A | 面试 / Interview | 8 面试 / Interview | 全项目 / whole project + `tests/course/` | ✅ 已完成 / Done |
 | 14 | 从零复现整个项目 / Rebuild the Entire Project | 复现 / Reproduction | 9 复现 / Reproduction | 全项目（端到端） / whole project (end-to-end) | 🚧 进行中 / In progress |

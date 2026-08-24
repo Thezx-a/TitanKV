@@ -1,0 +1,790 @@
+/* ============================================================
+   TitanKV 分层知识图谱 — 共享样式
+   设计基调：浅色 / 简约 / 编辑器感 / 低 AI 味
+   ============================================================ */
+
+:root {
+  /* 暖白底 + 墨黑字 + 单一深蓝点缀 */
+  --bg:          #FAF9F6;
+  --bg-soft:     #F3F1EB;
+  --bg-card:     #FFFFFF;
+  --ink:         #1F2328;
+  --ink-soft:    #5C6166;
+  --ink-mute:    #8A8F94;
+  --line:        #E6E2D8;
+  --line-soft:   #EFEBE0;
+  --accent:      #2B4C7E;        /* 深墨蓝 */
+  --accent-soft: #EAF0F8;
+  --accent-mute: #6E8AB5;
+  --warn:        #8A5A2B;        /* 暖棕，仅用于标签 */
+  --code-bg:     #F6F4EE;
+  --code-ink:    #2A2A2A;
+  --shadow:      0 1px 2px rgba(31,35,40,.04), 0 8px 24px rgba(31,35,40,.04);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+               "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* 衬线标题 — 编辑器/文档感，弱化 AI 模板感 */
+h1, h2, h3, h4 {
+  font-family: "Iowan Old Style", "Apple Garamond", "Baskerville",
+               "Times New Roman", "Songti SC", "SimSun", serif;
+  color: var(--ink);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+  margin: 0 0 .4em;
+}
+h1 { font-size: 2.1rem; letter-spacing: -0.02em; }
+h2 { font-size: 1.45rem; margin-top: 2.4em; padding-bottom: .35em; border-bottom: 1px solid var(--line); }
+h3 { font-size: 1.12rem; margin-top: 1.8em; color: var(--ink); }
+h4 { font-size: .98rem; margin-top: 1.4em; color: var(--ink-soft); font-weight: 600; }
+
+p { margin: 0 0 1em; }
+a { color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; transition: border-color .15s; }
+a:hover { border-bottom-color: var(--accent); }
+
+code, pre, kbd {
+  font-family: "SFMono-Regular", "JetBrains Mono", "Fira Code", Consolas,
+               "Liberation Mono", Menlo, monospace;
+  font-size: .86em;
+}
+code {
+  background: var(--code-bg);
+  color: var(--code-ink);
+  padding: .12em .4em;
+  border-radius: 3px;
+  border: 1px solid var(--line-soft);
+}
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent-mute);
+  border-radius: 4px;
+  padding: 1em 1.15em;
+  overflow-x: auto;
+  margin: 1.2em 0;
+  line-height: 1.55;
+}
+pre code { background: none; border: 0; padding: 0; font-size: .85em; }
+
+/* —— 布局 —— */
+.shell {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 0 32px;
+}
+.layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 48px;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 32px;
+}
+.sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  padding: 40px 0;
+  overflow-y: auto;
+}
+.content { padding: 48px 0 96px; min-width: 0; }
+
+/* —— 顶部细条 —— */
+.topbar {
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+.topbar-inner {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 18px 32px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.brand {
+  font-family: "Iowan Old Style", "Baskerville", "Songti SC", serif;
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+.brand small {
+  font-family: inherit;
+  font-weight: 400;
+  color: var(--ink-mute);
+  font-size: .82rem;
+  margin-left: 8px;
+}
+.topbar nav a {
+  color: var(--ink-soft);
+  font-size: .88rem;
+  margin-left: 22px;
+  border-bottom: 0;
+}
+.topbar nav a:hover { color: var(--accent); }
+
+/* —— 首页 hero —— */
+.hero {
+  padding: 72px 0 40px;
+  border-bottom: 1px solid var(--line);
+}
+.hero .eyebrow {
+  font-size: .78rem;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 600;
+  margin-bottom: 18px;
+}
+.hero h1 {
+  font-size: 2.6rem;
+  margin-bottom: .5em;
+}
+.hero .lede {
+  font-size: 1.08rem;
+  color: var(--ink-soft);
+  max-width: 640px;
+  margin-bottom: 0;
+}
+.hero-meta {
+  margin-top: 28px;
+  display: flex;
+  gap: 28px;
+  flex-wrap: wrap;
+  color: var(--ink-mute);
+  font-size: .86rem;
+}
+.hero-meta span { display: inline-flex; align-items: center; gap: 6px; }
+.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-mute); display: inline-block; }
+
+/* —— 层卡片网格 —— */
+.layer-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  margin: 40px 0;
+}
+.layer-card {
+  background: var(--bg-card);
+  padding: 28px 28px 30px;
+  text-decoration: none;
+  color: inherit;
+  border-bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: background .15s;
+  position: relative;
+}
+.layer-card:hover { background: var(--accent-soft); border-bottom: 0; }
+.layer-card .num {
+  font-family: "Iowan Old Style", "Baskerville", serif;
+  font-size: .8rem;
+  color: var(--ink-mute);
+  letter-spacing: .1em;
+}
+.layer-card .title {
+  font-family: "Iowan Old Style", "Baskerville", "Songti SC", serif;
+  font-size: 1.3rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.layer-card .sub {
+  font-size: .85rem;
+  color: var(--ink-soft);
+  margin: 0;
+}
+.layer-card .tags {
+  margin-top: 12px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.tag {
+  font-size: .72rem;
+  color: var(--ink-soft);
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  padding: 2px 8px;
+  border-radius: 10px;
+  letter-spacing: .02em;
+}
+.layer-card .arrow {
+  position: absolute;
+  right: 24px;
+  bottom: 26px;
+  color: var(--accent-mute);
+  font-size: 1.1rem;
+  opacity: 0;
+  transition: opacity .15s, transform .15s;
+}
+.layer-card:hover .arrow { opacity: 1; transform: translateX(4px); }
+
+/* —— 请求链路（流程图） —— */
+.flow {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-card);
+  padding: 28px;
+  margin: 32px 0;
+}
+.flow-title {
+  font-family: "Iowan Old Style", "Baskerville", serif;
+  font-size: 1.05rem;
+  margin: 0 0 18px;
+  color: var(--ink);
+}
+.flow-track {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.flow-node {
+  flex: 1;
+  min-width: 110px;
+  text-align: center;
+  padding: 14px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  font-size: .82rem;
+}
+.flow-node .fn {
+  font-weight: 600;
+  color: var(--ink);
+  display: block;
+  margin-bottom: 2px;
+}
+.flow-node .fd { color: var(--ink-mute); font-size: .74rem; }
+.flow-arrow {
+  flex: 0 0 auto;
+  align-self: center;
+  color: var(--accent-mute);
+  padding: 0 6px;
+  font-size: .9rem;
+}
+
+/* —— 数据流图（首页 ASCII 风） —— */
+.arch-diagram {
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 24px 28px;
+  margin: 32px 0;
+  font-family: "SFMono-Regular", "JetBrains Mono", Consolas, monospace;
+  font-size: .78rem;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/* —— 知识表 —— */
+table.kp {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 20px 0;
+  font-size: .9rem;
+}
+table.kp th, table.kp td {
+  text-align: left;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: top;
+}
+table.kp thead th {
+  font-family: "Iowan Old Style", "Basketti", serif;
+  font-weight: 600;
+  color: var(--ink);
+  border-bottom: 2px solid var(--line);
+  background: var(--bg-soft);
+  font-size: .86rem;
+}
+table.kp tbody tr:hover { background: var(--bg-soft); }
+table.kp td code { font-size: .82em; }
+
+/* —— 知识块（每层详情用） —— */
+.block {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-card);
+  padding: 26px 30px;
+  margin: 22px 0;
+  box-shadow: var(--shadow);
+}
+.block-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.block-head h3 { margin: 0; font-size: 1.08rem; }
+.block-head .src {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: .76rem;
+  color: var(--ink-mute);
+}
+.block-head .src a { color: var(--accent-mute); }
+.block-body p { font-size: .92rem; color: var(--ink-soft); margin-bottom: .8em; }
+.block-body ul { padding-left: 1.2em; margin: .4em 0 .8em; color: var(--ink-soft); font-size: .92rem; }
+.block-body li { margin-bottom: .35em; }
+.block-body li strong { color: var(--ink); font-weight: 600; }
+
+/* —— 侧栏导航 —— */
+.side-title {
+  font-family: "Iowan Old Style", "Basketti", serif;
+  font-size: .78rem;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  margin: 0 0 14px;
+}
+.side-list { list-style: none; padding: 0; margin: 0 0 28px; }
+.side-list li { margin: 0 0 2px; }
+.side-list a {
+  display: block;
+  padding: 5px 0;
+  color: var(--ink-soft);
+  font-size: .86rem;
+  border-bottom: 0;
+  border-left: 2px solid transparent;
+  padding-left: 12px;
+}
+.side-list a:hover { color: var(--accent); border-left-color: var(--accent-soft); }
+.side-list a.active { color: var(--accent); border-left-color: var(--accent); font-weight: 500; }
+.side-list .layer-num { color: var(--ink-mute); font-size: .76rem; margin-right: 6px; }
+
+.side-back {
+  display: inline-block;
+  margin-top: 18px;
+  font-size: .84rem;
+  color: var(--ink-soft);
+  border: 1px solid var(--line);
+  padding: 6px 12px;
+  border-radius: 4px;
+}
+.side-back:hover { color: var(--accent); border-color: var(--accent-mute); }
+
+/* —— 页头（每层页） —— */
+.page-head {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 28px;
+  margin-bottom: 8px;
+}
+.page-head .crumb {
+  font-size: .8rem;
+  color: var(--ink-mute);
+  margin-bottom: 14px;
+}
+.page-head .crumb a { color: var(--ink-soft); }
+.page-head .crumb .sep { margin: 0 8px; color: var(--ink-mute); }
+.page-head h1 { font-size: 2.1rem; margin-bottom: .3em; }
+.page-head .desc { color: var(--ink-soft); font-size: 1.02rem; max-width: 680px; margin-bottom: 0; }
+.page-head .meta {
+  margin-top: 20px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.chip {
+  font-size: .74rem;
+  color: var(--ink-soft);
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  padding: 3px 10px;
+  border-radius: 12px;
+}
+
+/* —— 小节分隔 —— */
+hr.thin { border: 0; border-top: 1px solid var(--line); margin: 36px 0; }
+
+/* —— 关键文件列表 —— */
+.file-list { list-style: none; padding: 0; margin: 12px 0; }
+.file-list li {
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--line-soft);
+  font-size: .88rem;
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+}
+.file-list li:last-child { border-bottom: 0; }
+.file-list .fp {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  color: var(--accent);
+  font-size: .84rem;
+  flex: 0 0 auto;
+}
+.file-list .fd { color: var(--ink-soft); }
+
+/* —— 页脚 —— */
+.footer {
+  border-top: 1px solid var(--line);
+  padding: 28px 0;
+  color: var(--ink-mute);
+  font-size: .82rem;
+  text-align: center;
+}
+
+/* —— 响应式 —— */
+@media (max-width: 880px) {
+  .layout { grid-template-columns: 1fr; gap: 0; padding: 0 22px; }
+  .sidebar { position: static; height: auto; padding: 22px 0 8px; border-bottom: 1px solid var(--line); }
+  .layer-grid { grid-template-columns: 1fr; }
+  .hero { padding: 48px 0 28px; }
+  .hero h1 { font-size: 2rem; }
+  .shell, .topbar-inner { padding: 0 22px; }
+  .content { padding: 28px 0 64px; }
+  .flow-track { flex-direction: column; }
+  .flow-arrow { transform: rotate(90deg); padding: 4px 0; }
+}
+
+/* —— 高亮当前层（首页当前层标记） —— */
+.cur { color: var(--accent); font-weight: 600; }
+
+/* ============================================================
+   图片 figure — 真实彩色图，圆角 + 细边 + 阴影
+   ============================================================ */
+.figure {
+  margin: 32px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-card);
+  box-shadow: var(--shadow);
+}
+.figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.figure.wide img { max-height: 380px; object-fit: cover; }
+.figure.fig-caption { padding: 0; }
+.figcap {
+  padding: 12px 18px;
+  font-size: .8rem;
+  color: var(--ink-mute);
+  background: var(--bg-soft);
+  border-top: 1px solid var(--line-soft);
+  font-family: "Iowan Old Style", "Baskerville", serif;
+  font-style: italic;
+}
+.figure.rounded img { border-radius: 8px; }
+
+.hero-figure {
+  margin: 0 0 36px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  box-shadow: 0 4px 24px rgba(31,35,40,.06);
+}
+.hero-figure img { display: block; width: 100%; height: auto; max-height: 360px; object-fit: cover; }
+
+.layer-banner {
+  margin: 20px 0 28px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}
+.layer-banner img { display: block; width: 100%; height: 220px; object-fit: cover; }
+
+/* ============================================================
+   竖向调用流程图 — vflow
+   彩色编号节点 + 竖向连接线
+   ============================================================ */
+.vflow {
+  position: relative;
+  margin: 28px 0 32px;
+  padding: 8px 0 8px 0;
+}
+.vflow::before {
+  content: "";
+  position: absolute;
+  left: 23px;
+  top: 24px;
+  bottom: 24px;
+  width: 2px;
+  background: linear-gradient(to bottom, var(--accent) 0%, var(--accent-mute) 50%, var(--line) 100%);
+}
+.vstep {
+  position: relative;
+  padding: 0 0 18px 60px;
+  margin: 0;
+}
+.vstep:last-child { padding-bottom: 0; }
+.vstep .vnode {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--bg-card);
+  border: 2px solid var(--accent);
+  color: var(--accent);
+  font-family: "Iowan Old Style", "Baskerville", serif;
+  font-weight: 600;
+  font-size: 1.05rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(43,76,126,.12);
+  z-index: 1;
+}
+.vstep .vnode.alt { background: var(--accent); color: #fff; border-color: var(--accent); }
+.vstep .vnode.warn { border-color: var(--warn); color: var(--warn); }
+.vstep .vbody {
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent-mute);
+  border-radius: 6px;
+  padding: 14px 18px;
+  box-shadow: var(--shadow);
+}
+.vstep .vtitle {
+  font-family: "Iowan Old Style", "Baskerville", "Songti SC", serif;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0 0 6px;
+}
+.vstep .vdesc {
+  font-size: .9rem;
+  color: var(--ink-soft);
+  margin: 0 0 8px;
+}
+.vstep .vdetail {
+  font-size: .82rem;
+  color: var(--ink-mute);
+  background: var(--bg-soft);
+  border-radius: 4px;
+  padding: 8px 12px;
+  border-left: 2px solid var(--accent-soft);
+  margin: 0;
+  white-space: pre-wrap;
+}
+.vstep .vdetail strong { color: var(--accent); font-weight: 600; }
+.vstep .vtag {
+  display: inline-block;
+  font-size: .7rem;
+  letter-spacing: .04em;
+  padding: 2px 8px;
+  border-radius: 10px;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+.vtag.danger { background: #F5E8DD; color: #8A5A2B; border: 1px solid #E8D5C4; }
+.vtag.safe   { background: #E6EFE6; color: #3E6B3E; border: 1px solid #D0E0D0; }
+.vtag.warn   { background: #F6EFDB; color: #7A6A2B; border: 1px solid #E6D9B8; }
+
+/* 双列竖向流程（并列对照，如读/写路径） */
+.vflow-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 28px;
+  margin: 28px 0;
+}
+.vflow-pair .vflow::before { left: 23px; }
+.vflow-pair h4 {
+  text-align: center;
+  margin: 0 0 14px;
+  font-size: .95rem;
+  color: var(--ink-soft);
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+@media (max-width: 720px) {
+  .vflow-pair { grid-template-columns: 1fr; }
+}
+
+/* ============================================================
+   设计深度分析 — analysis
+   ============================================================ */
+.analysis {
+  margin: 40px 0;
+  padding: 32px 0 8px;
+  border-top: 2px solid var(--accent);
+}
+.analysis > h2 {
+  margin-top: 0;
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.analysis .lead {
+  color: var(--ink-soft);
+  font-size: .98rem;
+  max-width: 720px;
+  margin-bottom: 24px;
+}
+
+/* 崩溃恢复场景卡片网格 */
+.scenario-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+  margin: 20px 0;
+}
+.scenario {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 16px 18px;
+  background: var(--bg-card);
+  box-shadow: var(--shadow);
+}
+.scenario .shead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.scenario .snum {
+  font-family: "Iowan Old Style", "Baskerville", serif;
+  font-size: .76rem;
+  color: var(--accent);
+  font-weight: 600;
+  letter-spacing: .08em;
+}
+.scenario .stitle {
+  font-family: "Iowan Old Style", "Baskerville", serif;
+  font-size: .96rem;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0;
+}
+.scenario .sbody {
+  font-size: .85rem;
+  color: var(--ink-soft);
+  margin: 0;
+}
+.scenario .sbody strong { color: var(--accent); }
+.scenario.danger { border-left: 3px solid #C97A4A; }
+.scenario.safe { border-left: 3px solid #6B9E78; }
+.scenario.warn { border-left: 3px solid #C9A84A; }
+.scenario .sresult {
+  margin-top: 8px;
+  font-size: .78rem;
+  padding: 4px 10px;
+  border-radius: 4px;
+  display: inline-block;
+}
+.sresult.ok { background: #E6EFE6; color: #3E6B3E; }
+.sresult.bad { background: #F5E8DD; color: #8A5A2B; }
+@media (max-width: 720px) { .scenario-grid { grid-template-columns: 1fr; } }
+
+/* 优缺点对照 */
+.procon {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  margin: 20px 0;
+}
+.procon > div {
+  background: var(--bg-card);
+  padding: 18px 22px;
+}
+.procon h4 {
+  margin: 0 0 10px;
+  font-size: .92rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.procon .pros h4 { color: #3E6B3E; }
+.procon .cons h4 { color: #8A5A2B; }
+.procon .badge {
+  font-size: .7rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 400;
+}
+.pros .badge { background: #E6EFE6; }
+.cons .badge { background: #F5E8DD; }
+.procon ul { margin: 0; padding-left: 1.1em; }
+.procon li {
+  font-size: .85rem;
+  color: var(--ink-soft);
+  margin-bottom: .4em;
+  line-height: 1.55;
+}
+.procon li strong { color: var(--ink); }
+@media (max-width: 720px) { .procon { grid-template-columns: 1fr; } }
+
+/* 设计取舍说明块 */
+.callout {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  background: var(--bg-card);
+  padding: 16px 20px;
+  border-radius: 4px;
+  margin: 18px 0;
+  font-size: .9rem;
+  color: var(--ink-soft);
+}
+.callout strong { color: var(--accent); }
+.callout .ctitle {
+  display: block;
+  font-family: "Iowan Old Style", "Baskerville", serif;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 6px;
+  font-size: .95rem;
+}
+
+/* 技术选型对比表 — 增强版 */
+table.compare {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 18px 0;
+  font-size: .86rem;
+}
+table.compare th, table.compare td {
+  text-align: left;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: top;
+}
+table.compare thead th {
+  font-family: "Iowan Old Style", "Baskerville", serif;
+  font-weight: 600;
+  color: var(--ink);
+  border-bottom: 2px solid var(--accent-mute);
+  background: var(--bg-soft);
+}
+table.compare tbody tr:hover { background: var(--bg-soft); }
+table.compare .win { color: #3E6B3E; font-weight: 600; }
+table.compare .lose { color: var(--ink-mute); }
+table.compare td code { font-size: .82em; }
+
+
+/* SVG architecture diagram */
+.arch-svg-wrap { margin: 1.5em 0; text-align: center; }
+.arch-svg-wrap img { max-width: 100%; height: auto; border-radius: 8px; box-shadow: var(--shadow); }

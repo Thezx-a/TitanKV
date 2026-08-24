@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>网络库 · Skynet · TitanKV</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand"><a href="index.html">TitanKV</a> <small>分层知识图谱</small></div>
+    <nav>
+      <a href="index.html#layers">分层总览</a>
+      <a href="index.html#flow">请求链路</a>
+      <a href="https://github.com/Thezx-a/TitanKV" target="_blank" rel="noopener">源码 ↗</a>
+    </nav>
+  </div>
+</header>
+
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="side-title">分层导航</div>
+    <ul class="side-list">
+      <li><a href="client.html"><span class="layer-num">L1</span>客户端层</a></li>
+      <li><a href="network.html" class="active"><span class="layer-num">L2</span>网络库 Skynet</a></li>
+      <li><a href="gateway.html"><span class="layer-num">L3</span>网关层</a></li>
+      <li><a href="services.html"><span class="layer-num">L4</span>微服务层</a></li>
+      <li><a href="distributed.html"><span class="layer-num">L5</span>分布式层</a></li>
+      <li><a href="storage.html"><span class="layer-num">L6</span>存储引擎</a></li>
+      <li><a href="observability.html"><span class="layer-num">L7</span>可观测性</a></li>
+      <li><a href="web.html"><span class="layer-num">L8</span>前端控制台</a></li>
+    </ul>
+    <a class="side-back" href="index.html">← 返回总览</a>
+  </aside>
+
+  <main class="content">
+
+    <div class="page-head">
+      <div class="crumb"><a href="index.html">总览</a><span class="sep">/</span>前置接入 / 网络库</div>
+      <h1>Skynet · C++20 协程网络库</h1>
+      <p class="desc">
+        Skynet 是项目对外的 :8080 前置网关，用 C++20 协程重写 muduo / libco 思路：
+        epoll ET + 协程化 IO + HTTP 解析 + 反向代理。它不做 JWT/限流，
+        只负责在 epoll ET + 协程下读完 HTTP（含半包拼包），再 LB/SSE 透传给后端 Gin。
+      </p>
+      <div class="meta">
+        <span class="chip">C++20 coroutine</span>
+        <span class="chip">epoll ET</span>
+        <span class="chip">Task + promise_type</span>
+        <span class="chip">HTTP 状态机</span>
+        <span class="chip">负载均衡</span>
+        <span class="chip">SSE 流式</span>
+      </div>
+    </div>
+
+    <h2>整体架构</h2>
+    <p>Skynet 分四块：<code>net</code> 协程化网络底座、<code>core</code> 协程调度、<code>http</code> 协议解析、<code>proxy</code> 网关代理。外加一个 <code>gateway/</code> 网关配置示例。</p>
+
+    <div class="arch-diagram">┌──────────────────────────────────────────────────────────┐
+│  gateway/  (skynet_gateway, 对外 :8080)                  │
+│   gateway.yaml 配置 → 反向代理到 Gin :18080             │
+└───────────────────────────┬──────────────────────────────┘
+                            │ 使用
+        ┌───────────────────┼───────────────────────┐
+        ▼                   ▼                       ▼
+  ┌──────────┐         ┌──────────┐           ┌──────────────┐
+  │  http/   │         │  proxy/  │           │    net/      │
+  │ 解析+路由│         │ LB+池+HC │           │ acceptor+IO  │
+  └────┬─────┘         └────┬─────┘           └──────┬───────┘
+       │ co_await            │ select()             │ watchOnce
+       └─────────────┬──────┴────────────────────────┘
+                     ▼
+              ┌─────────────┐
+              │   core/     │   协程调度三路复用
+              │ executor    │   epoll + ready queue + TimerWheel
+              │ task        │   promise_type 生命周期
+              └─────────────┘</div>
+
+    <h2>核心组件知识点</h2>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>Task · C++20 协程基础</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/skynet/include/skynet/core/task.h">skynet/include/skynet/core/task.h</a></span>
+      </div>
+      <div class="block-body">
+        <p>Task&lt;T&gt; 是协程的返回值类型，<code>promise_type</code> 管理协程的生命周期与挂起/恢复。</p>
+        <ul>
+          <li><strong>promise_type</strong>：实现 <code>initial_suspend / final_suspend / return_value / unhandled_exception</code>，桥接 <code>co_await</code> 链式调用。</li>
+          <li><strong>对称转移</strong>：协程挂起时把控制权交还 Executor，恢复时由就绪队列驱动。</li>
+          <li><strong>资源管理</strong>：Task 析构即协程帧释放，避免悬挂引用。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>IOContext · epoll ET 事件循环</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/skynet/include/skynet/net/io_context.h">net/io_context.h</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/skynet/src/net/io_context.cpp">io_context.cpp</a></span>
+      </div>
+      <div class="block-body">
+        <p>IOContext 是 Skynet 的核心事件循环，封装 epoll，支持与协程无缝集成。</p>
+        <ul>
+          <li><strong>ET 模式</strong>：使用 <code>EPOLLET</code>，事件就绪只通知一次，需一次性读完。</li>
+          <li><strong>watchOnce</strong>：一次性监听，触发后立即从 epoll 移除 fd——这是 ET 模式下安全的 re-arm 方式（避免竞态）。</li>
+          <li><strong>add / modify / remove</strong>：常规注册 / 改事件 / 注销。</li>
+          <li><strong>poll(timeout_ms)</strong>：阻塞等待 <code>kMaxEvents = 1024</code> 个事件，回调驱动协程恢复。</li>
+          <li><strong>回调表</strong>：<code>std::unordered_map&lt;int, Callback&gt;</code>，fd → 回调。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>Executor · 协程调度器</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/skynet/include/skynet/core/executor.h">core/executor.h</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/skynet/src/core/executor.cpp">executor.cpp</a></span>
+      </div>
+      <div class="block-body">
+        <p>Executor 是「三路复用」调度：epoll 事件 + 就绪协程队列 + 时间轮定时器，单线程驱动整个事件循环。</p>
+        <ul>
+          <li><strong>epoll</strong>：IO 就绪 → 恢复等待的协程。</li>
+          <li><strong>就绪队列</strong>：被唤醒的协程先入队，下一轮顺序执行。</li>
+          <li><strong>TimerWheel</strong>：时间轮定时器，<code>co_await timeout</code> 在此到期。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>TimerWheel · 时间轮定时器</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/skynet/include/skynet/core/timer_wheel.h">core/timer_wheel.h</a></span>
+      </div>
+      <div class="block-body">
+        <p>用时间轮实现 O(1) 添加 / O(1) 摘除的高效定时器，供协程 <code>co_await sleep</code> 与连接超时使用。</p>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>Acceptor / TcpStream / Socket</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/skynet/include/skynet/net/acceptor.h">net/acceptor.h</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/skynet/include/skynet/net/tcp_stream.h">tcp_stream.h</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/skynet/include/skynet/net/socket.h">socket.h</a></span>
+      </div>
+      <div class="block-body">
+        <p>把同步 socket 操作封装成可 <code>co_await</code> 的 Awaitable。</p>
+        <ul>
+          <li><strong>Acceptor</strong>：协程化 <code>accept</code>，每次新连接返回一个 TcpStream。</li>
+          <li><strong>TcpStream</strong>：<code>readExact / readUntil</code>，对 HTTP 半包友好（按分隔符/定长读）。</li>
+          <li><strong>Socket</strong>：<code>asyncRead / asyncWrite</code> 返回 Awaitable，内部注册到 IOContext 的 <code>watchOnce</code>。</li>
+          <li><strong>Resolver</strong>：协程化 DNS 解析，避免阻塞事件循环。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>HTTP 解析 · 增量状态机</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/skynet/include/skynet/http/parser.h">http/parser.h</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/skynet/src/http/parser.cpp">parser.cpp</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/skynet/include/skynet/http/router.h">router.h</a></span>
+      </div>
+      <div class="block-body">
+        <p>HTTP 解析器是增量状态机，适合协程边读边解析的流式场景。</p>
+        <pre><code>METHOD → PATH → VERSION → HEADER → BODY → DONE</code></pre>
+        <ul>
+          <li><strong>增量解析</strong>：每收到一段数据喂给状态机，可中断继续。</li>
+          <li><strong>chunked + pipelining</strong>：支持 Transfer-Encoding: chunked 与 HTTP 管道化。</li>
+          <li><strong>Router</strong>：路由匹配 + 参数提取。</li>
+          <li><strong>Headers / Response</strong>：头部规范化与响应构建。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>LoadBalancer · 四种负载策略</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/skynet/include/skynet/proxy/load_balancer.h">proxy/load_balancer.h</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/skynet/src/proxy/load_balancer.cpp">load_balancer.cpp</a></span>
+      </div>
+      <div class="block-body">
+        <p>负载均衡器是抽象基类，<code>select()</code> 返回 Upstream；<code>feedback()</code> 反馈成功/失败用于熔断。</p>
+        <ul>
+          <li><strong>RoundRobinLB</strong>：纯轮询，<code>idx_</code> 递增取模。</li>
+          <li><strong>WeightedRoundRobinLB</strong>：带权轮询，维护 <code>current_weights_</code>（平滑 WRR 算法）。</li>
+          <li><strong>LeastConnLB</strong>：最少连接数优先。</li>
+          <li><strong>ConsistentHashLB</strong>：一致性哈希，<code>vnodes = 160</code> 个虚拟节点构建 hash ring，<code>buildRing()</code> 初始化。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>ConnectionPool + HealthCheck + Upstream</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/skynet/include/skynet/proxy/connection_pool.h">connection_pool.h</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/skynet/include/skynet/proxy/health_check.h">health_check.h</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/skynet/include/skynet/proxy/upstream.h">upstream.h</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/skynet/include/skynet/proxy/middleware.h">middleware.h</a></span>
+      </div>
+      <div class="block-body">
+        <ul>
+          <li><strong>ConnectionPool</strong>：复用到后端的 TCP 连接，避免每次握手；<code>get / release</code>。</li>
+          <li><strong>HealthCheck</strong>：后台线程周期探测 Upstream，失败标记降级。</li>
+          <li><strong>Upstream / UpstreamManager</strong>：后端实例抽象，被 LB 与池共享。</li>
+          <li><strong>Middleware</strong>：代理链中间件钩子。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>skynet_gateway · 对外 :8080 前置</h3>
+        <span class="src"><a href="https://github.com/Thezx-a/TitanKV/blob/main/skynet/gateway/main.cpp">skynet/gateway/main.cpp</a> · <a href="https://github.com/Thezx-a/TitanKV/blob/main/skynet/gateway/gateway.yaml">gateway.yaml</a></span>
+      </div>
+      <div class="block-body">
+        <p>Skynet 的网关示例，读 <code>gateway.yaml</code> 配置后启动协程 accept 循环，把外部请求反向代理到后端 Gin。</p>
+        <ul>
+          <li><strong>职责边界</strong>：skynet 不做 JWT、不做限流——这些在 Gin 层；skynet 只做接入与转发。</li>
+          <li><strong>SSE 流式</strong>：支持 Server-Sent Events，RAG chat 等流式响应穿透。</li>
+          <li><strong>主从 Reactor + 协程</strong>：Main 只 accept；Sub 上 <code>co_await</code> IO（非阻塞业务线程池模型）。</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>与 muduo / libco 的对比</h2>
+    <table class="kp">
+      <thead><tr><th>维度</th><th>muduo</th><th>libco</th><th>skynet</th></tr></thead>
+      <tbody>
+        <tr><td>并发模型</td><td>回调 + one loop per thread</td><td>协程（共享栈 / 非共享栈）</td><td>C++20 协程 + ET epoll</td></tr>
+        <tr><td>事件</td><td>LT epoll</td><td>LT epoll + hook</td><td>ET epoll + watchOnce</td></tr>
+        <tr><td>HTTP</td><td>无内置</td><td>无内置</td><td>增量状态机</td></tr>
+        <tr><td>负载均衡</td><td>无</td><td>无</td><td>RR/WRR/LeastConn/CH</td></tr>
+        <tr><td>定时器</td><td>红黑树 / timerfd</td><td>时间轮</td><td>时间轮 TimerWheel</td></tr>
+      </tbody>
+    </table>
+
+    <h2>构建与测试</h2>
+    <pre><code># C++20 + Ninja
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_COMPILER=g++-12 -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+cmake --build build -j
+
+# 产物
+#   build/skynet/libskynet.a
+#   build/skynet/skynet_gateway
+
+# 测试 (GoogleTest)
+ctest --test-dir build --output-on-failure</code></pre>
+    <p>测试覆盖：<code>test_load_balancer.cpp</code> / <code>test_parser.cpp</code> / <code>test_router.cpp</code> / <code>test_task.cpp</code>。</p>
+
+    <h2>关键源码索引</h2>
+    <ul class="file-list">
+      <li><span class="fp">net/io_context.h</span><span class="fd">epoll ET 事件循环，watchOnce re-arm</span></li>
+      <li><span class="fp">net/acceptor.h · tcp_stream.h · socket.h</span><span class="fd">协程化 accept / 读写 / Awaitable</span></li>
+      <li><span class="fp">net/resolver.h</span><span class="fd">协程化 DNS</span></li>
+      <li><span class="fp">core/task.h · executor.h · thread_pool.h · timer_wheel.h</span><span class="fd">协程 / 调度 / 池 / 时间轮</span></li>
+      <li><span class="fp">http/parser.h · router.h · headers.h · response.h</span><span class="fd">HTTP 解析与路由</span></li>
+      <li><span class="fp">proxy/load_balancer.h · connection_pool.h · health_check.h · upstream.h · middleware.h</span><span class="fd">代理层四件套</span></li>
+      <li><span class="fp">gateway/main.cpp · gateway.yaml</span><span class="fd">对外 :8080 前置网关</span></li>
+      <li><span class="fp">docs/design.md</span><span class="fd">设计文档</span></li>
+    </ul>
+
+  
+    <h2 id="structure">详细目录结构</h2>
+    <pre><code>skynet/
+├── include/skynet/
+│   ├── core/
+│   │   ├── task.h            Task&lt;T&gt; + promise_type
+│   │   ├── executor.h        协程调度 (epoll + ready queue + TimerWheel)
+│   │   └── detached_task.h   fire-and-forget 协程
+│   ├── net/
+│   │   ├── io_context.h      epoll ET 事件环
+│   │   ├── io_awaitable.h    co_await 读/写/连接
+│   │   ├── socket.h / acceptor.h
+│   ├── http/
+│   │   ├── parser.h          增量状态机 METHOD→BODY→DONE
+│   │   └── router.h
+│   └── proxy/
+│       ├── load_balancer.h   WRR / LeastConn / ConsistentHash
+│       ├── health_check.h    后台 TCP 探活
+│       └── connection_pool.h 上游连接复用
+├── gateway/
+│   ├── main.cpp              skynet_gateway (Main accept + Sub 协程 IO)
+│   └── gateway.yaml          listen:8080 → upstream:18080
+└── tests/                    Task/Executor/TimerWheel/Upstream</code></pre>
+    <table class="kp">
+      <thead><tr><th>组件</th><th>模式</th><th>与 minikv_server 对比</th></tr></thead>
+      <tbody>
+        <tr><td>skynet_gateway</td><td>epoll ET + co_await</td><td>HTTP 反代到 Gin</td></tr>
+        <tr><td>minikv_server</td><td>epoll LT + 线程池</td><td>MK TCP 协议 / LSM</td></tr>
+        <tr><td>LB 时机</td><td>读完完整 HTTP 后 select()</td><td>非 accept 时选上游</td></tr>
+      </tbody>
+    </table>
+
+  </main>
+</div>
+
+</body>
+</html>

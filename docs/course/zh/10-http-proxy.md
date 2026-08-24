@@ -1,6 +1,6 @@
 # Module 10 — HTTP 与反向代理
 
-> 对应源码：[parser.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/http/parser.h)、[router.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/http/router.h)、[load_balancer.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/proxy/load_balancer.h)、[connection_pool.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/proxy/connection_pool.h)、[health_check.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/proxy/health_check.h)
+> 对应源码：[parser.h](../../../skynet/include/skynet/http/parser.h)、[router.h](../../../skynet/include/skynet/http/router.h)、[load_balancer.h](../../../skynet/include/skynet/proxy/load_balancer.h)、[connection_pool.h](../../../skynet/include/skynet/proxy/connection_pool.h)、[health_check.h](../../../skynet/include/skynet/proxy/health_check.h)
 
 ## 背景与动机
 
@@ -23,7 +23,7 @@
 
 ### 2.1 HTTP/1.1 状态机解析
 
-[parser.h:13-31](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/http/parser.h) 用状态机解析：
+[parser.h:13-31](../../../skynet/include/skynet/http/parser.h) 用状态机解析：
 
 ```cpp
 enum class State {
@@ -72,7 +72,7 @@ HTTP 用 `Content-Length`（固定长度）或 `Transfer-Encoding: chunked`（�
 
 ### 2.3 负载均衡策略
 
-[load_balancer.h:11-52](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/proxy/load_balancer.h) 定义抽象基类 + 四实现：
+[load_balancer.h:11-52](../../../skynet/include/skynet/proxy/load_balancer.h) 定义抽象基类 + 四实现：
 
 ```cpp
 class LoadBalancer {
@@ -118,7 +118,7 @@ class ConsistentHashLB : public LoadBalancer {
 
 ### 2.4 连接池
 
-[connection_pool.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/proxy/connection_pool.h)：复用 TCP 连接。
+[connection_pool.h](../../../skynet/include/skynet/proxy/connection_pool.h)：复用 TCP 连接。
 
 - **问题**：每次请求新建 TCP 连接要 3 次握手 + TLS 握手，延迟高、内核资源消耗大。
 - **方案**：池中保持若干到每个后端的长连接，请求时借出、用完归还；连接空闲超时则关闭。
@@ -127,7 +127,7 @@ class ConsistentHashLB : public LoadBalancer {
 
 ### 2.5 健康检查
 
-[health_check.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/proxy/health_check.h)：
+[health_check.h](../../../skynet/include/skynet/proxy/health_check.h)：
 
 - **主动探测**：周期性向后端发健康请求（如 `GET /health`），失败 N 次标记下线。
 - **被动熔断**：正常请求失败率超阈值，临时剔除该后端，半开探测恢复。
@@ -178,7 +178,7 @@ Client ──► [skynet Gateway]
         Backend Pool (N 个后端)
 ```
 
-skynet 的 `gateway/`（[gateway/main.cpp](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/gateway/main.cpp)）即这样一个反向代理，配置见 [gateway.yaml](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/gateway/gateway.yaml)。
+skynet 的 `gateway/`（[gateway/main.cpp](../../../skynet/gateway/main.cpp)）即这样一个反向代理，配置见 [gateway.yaml](../../../skynet/gateway/gateway.yaml)。
 
 ## 3. 思考题
 
@@ -192,7 +192,7 @@ skynet 的 `gateway/`（[gateway/main.cpp](file:///c:/Users/Administrator/Deskto
 
 ### 题 4.1（手撕 HTTP 请求解析器）
 
-参考 [parser.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/http/parser.h)，实现一个 HTTP/1.1 请求行 + 头部解析器（不含 body）。测试：分 3 次 `feed` 同一请求（模拟拆包），验证最终 `isComplete()` 且字段正确。
+参考 [parser.h](../../../skynet/include/skynet/http/parser.h)，实现一个 HTTP/1.1 请求行 + 头部解析器（不含 body）。测试：分 3 次 `feed` 同一请求（模拟拆包），验证最终 `isComplete()` 且字段正确。
 
 ### 题 4.2（平滑加权轮询）
 
@@ -200,7 +200,7 @@ skynet 的 `gateway/`（[gateway/main.cpp](file:///c:/Users/Administrator/Deskto
 
 ### 题 4.3（一致性哈希 LB）
 
-参考 [load_balancer.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/proxy/load_balancer.h) 的 `ConsistentHashLB`，实现 `select(key)`：用 key 的哈希在环上顺时针找最近虚拟节点。测试：100 万 key 分布到 5 后端，标准差 < 5%；下线 1 后端后，仅约 1/5 key 迁移。
+参考 [load_balancer.h](../../../skynet/include/skynet/proxy/load_balancer.h) 的 `ConsistentHashLB`，实现 `select(key)`：用 key 的哈希在环上顺时针找最近虚拟节点。测试：100 万 key 分布到 5 后端，标准差 < 5%；下线 1 后端后，仅约 1/5 key 迁移。
 
 ### 题 4.4（连接池 + 健康检查）
 

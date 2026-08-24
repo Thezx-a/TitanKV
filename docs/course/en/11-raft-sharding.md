@@ -155,7 +155,7 @@ By default Raft writes go through the Leader + majority, but a **read** that jus
 
 ### 2.8 etcd Service Discovery
 
-[deploy/dev/docker-compose.yml](file:///c:/Users/Administrator/Desktop/hellocpp/deploy/dev/docker-compose.yml) starts a local etcd. Uses:
+[deploy/dev/docker-compose.yml](../../../deploy/dev/docker-compose.yml) starts a local etcd. Uses:
 
 - **Service registration**: each TitanKV node registers on startup; the PD watches changes.
 - **Config distribution**: the routing table and shard assignments go into etcd; clients watch.
@@ -216,3 +216,10 @@ Thinking question key points:
 ---
 
 ← [Module 10](./10-http-proxy.md)  |  Next: [Module 12 — Go µServices & Next.js Console](./12-go-nextjs.md) →
+
+## Repo status (latest)
+
+- `distributed/` ships a teaching hashicorp/raft stack (1-node Bootstrap, FSM Put/Del, Snapshot; `JoinCluster` demo).
+- Entry: `cmd/raft`; tests: `go test ./distributed/...`.
+- `gateway/shard.go` helps sharding demos; **multi-host production cluster is still planned**.
+- See `distributed/node.go`, `cluster.go`, `fsm.go`.

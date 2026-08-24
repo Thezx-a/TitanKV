@@ -1,6 +1,6 @@
 # Module 06 — BloomFilter & Hashing
 
-> Source: [bloom_filter.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/bloom_filter.h), [hash.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/hash.h)
+> Source: [bloom_filter.h](../../../minikv/src/core/bloom_filter.h), [hash.h](../../../minikv/src/utils/hash.h)
 > Planned: consistent-hash sharding in the distributed layer (REFACTORING.md Phase 5)
 
 ## Background & Motivation
@@ -52,7 +52,7 @@ A Bloom Filter pre-filters before reading an SSTable: if the BF says "absent", s
 
 ### 2.2 minikv BloomFilter Construction
 
-[bloom_filter.h:17-26](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/bloom_filter.h):
+[bloom_filter.h:17-26](../../../minikv/src/core/bloom_filter.h):
 
 ```cpp
 BloomFilter(size_t expected_keys, double false_positive_rate = 0.01) {
@@ -76,7 +76,7 @@ minikv caps `num_hashes_` at 30 to avoid pathological params making hashing too 
 
 ### 2.3 Double Hashing
 
-[bloom_filter.h:28-36](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/bloom_filter.h):
+[bloom_filter.h:28-36](../../../minikv/src/core/bloom_filter.h):
 
 ```cpp
 void add(const Slice& key) {
@@ -94,11 +94,11 @@ void add(const Slice& key) {
 - Benefit: only 2 hashes computed (not k), big CPU savings.
 - `pos / 8` locates the byte, `1 << (pos % 8)` locates the bit; `|=` sets it.
 
-`mightContain` ([bloom_filter.h:38-47](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/bloom_filter.h)) is symmetric: any 0 bit returns false immediately; all 1s returns true.
+`mightContain` ([bloom_filter.h:38-47](../../../minikv/src/core/bloom_filter.h)) is symmetric: any 0 bit returns false immediately; all 1s returns true.
 
 ### 2.4 MurmurHash2
 
-[hash.h:8-30](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/hash.h) implements MurmurHash2:
+[hash.h:8-30](../../../minikv/src/utils/hash.h) implements MurmurHash2:
 
 ```cpp
 inline uint32_t murmurHash2(const char* data, size_t len, uint32_t seed) {
@@ -119,7 +119,7 @@ inline uint32_t murmurHash2(const char* data, size_t len, uint32_t seed) {
 
 ### 2.5 Persistence and Loading
 
-[bloom_filter.h:49-72](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/bloom_filter.h): the BF is persisted with the SSTable, format `[num_hashes(4)][bits_per_key(4)][size(8)][bits...]`. `load` returns a `unique_ptr` or nullptr on failure — RAII + explicit errors.
+[bloom_filter.h:49-72](../../../minikv/src/core/bloom_filter.h): the BF is persisted with the SSTable, format `[num_hashes(4)][bits_per_key(4)][size(8)][bits...]`. `load` returns a `unique_ptr` or nullptr on failure — RAII + explicit errors.
 
 ### 2.6 Consistent Hashing (Foundation for the Distributed Layer)
 

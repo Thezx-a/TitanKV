@@ -130,13 +130,13 @@ flowchart TD
 - No implicit int conversion (no `if (color == 1)` foot-gun).
 - Doesn't pollute the enclosing namespace.
 - Can be forward-declared.
-- minikv uses `enum class StatusCode` in [status.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/status.h); `enum class State` and `enum class ParseResult` in [parser.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/http/parser.h).
+- minikv uses `enum class StatusCode` in [status.h](../../../minikv/include/minikv/status.h); `enum class State` and `enum class ParseResult` in [parser.h](../../../skynet/include/skynet/http/parser.h).
 
 **Q10.** `[[nodiscard]]` / `[[fallthrough]]` / `[[maybe_unused]]` — purpose & scenarios?
 
 **A10.**
 - `[[nodiscard]]`: return value must not be discarded. `[[nodiscard]] Status Open(...);` reminds callers to check errors.
-- `[[fallthrough]]`: explicit switch fallthrough. Used in minikv [hash.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/hash.h) MurmurHash2 size branches.
+- `[[fallthrough]]`: explicit switch fallthrough. Used in minikv [hash.h](../../../minikv/src/utils/hash.h) MurmurHash2 size branches.
 - `[[maybe_unused]]`: suppresses unused warnings, common for conditionally-compiled variables.
 
 ---
@@ -174,7 +174,7 @@ flowchart TD
 **A14.**
 - cv carries no data; a lock must protect shared state (queue/flag), and a predicate tests whether the condition holds.
 - Spurious wakeup: `wait` may return without `notify` (OS allows it). Must use `wait(lock, pred)` to loop-check.
-- minikv [thread_pool.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/thread_pool.h): `cv_.wait(lock, [this]{ return !queue_.empty() || stop_; })`.
+- minikv [thread_pool.h](../../../minikv/src/utils/thread_pool.h): `cv_.wait(lock, [this]{ return !queue_.empty() || stop_; })`.
 
 **Q15.** Core elements of a thread pool? How does minikv ThreadPool shut down?
 
@@ -203,7 +203,7 @@ flowchart TD
 
 **Q18.** Purpose of TLS (`thread_local`)? Where does minikv use it?
 
-**A18.** `thread_local` gives each thread an independent copy — lock-free access. minikv [skip_list.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h) uses `thread_local std::mt19937` for RNG — avoids per-instance generators and lock contention.
+**A18.** `thread_local` gives each thread an independent copy — lock-free access. minikv [skip_list.h](../../../minikv/src/core/skip_list.h) uses `thread_local std::mt19937` for RNG — avoids per-instance generators and lock contention.
 
 ---
 
@@ -227,7 +227,7 @@ flowchart TD
 
 **Q21.** What problem does Symmetric Transfer solve?
 
-**A21.** Nested `co_await` accumulates coroutine frames on the stack → deep recursion blows the stack. Symmetric transfer has `await_suspend` return a `coroutine_handle` (instead of `void/bool`), letting the suspended coroutine directly "jump" to the next one rather than returning up the call chain — keeping stack depth O(1). skynet [task.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/core/task.h) `final_awaiter::await_suspend` uses symmetric transfer.
+**A21.** Nested `co_await` accumulates coroutine frames on the stack → deep recursion blows the stack. Symmetric transfer has `await_suspend` return a `coroutine_handle` (instead of `void/bool`), letting the suspended coroutine directly "jump" to the next one rather than returning up the call chain — keeping stack depth O(1). skynet [task.h](../../../skynet/include/skynet/core/task.h) `final_awaiter::await_suspend` uses symmetric transfer.
 
 **Q22.** Stackless vs stackful coroutines?
 
@@ -243,7 +243,7 @@ flowchart TD
 
 **Q23.** What is an Executor and why is it needed?
 
-**A23.** Coroutine resumption needs a scheduler to decide "which thread to resume on." `std::suspend_always` doesn't specify; whoever calls `resume()` decides. An Executor abstracts the scheduling policy (same-thread / thread-pool / IO-thread). skynet [executor.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/core/executor.h) is the coroutine scheduler that submits resumable coroutines to a thread pool.
+**A23.** Coroutine resumption needs a scheduler to decide "which thread to resume on." `std::suspend_always` doesn't specify; whoever calls `resume()` decides. An Executor abstracts the scheduling policy (same-thread / thread-pool / IO-thread). skynet [executor.h](../../../skynet/include/skynet/core/executor.h) is the coroutine scheduler that submits resumable coroutines to a thread pool.
 
 ---
 
@@ -257,7 +257,7 @@ flowchart TD
 - Search: from top level go right; when next is greater, drop down.
 - Insert: random level (`p=0.5`, `max=16`), record per-level predecessor, update forward.
 - Erase: same search, update predecessors' forward.
-- minikv [skip_list.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h) is the production version (InternalKey compare, shared_mutex, thread_local RNG) — a good reference.
+- minikv [skip_list.h](../../../minikv/src/core/skip_list.h) is the production version (InternalKey compare, shared_mutex, thread_local RNG) — a good reference.
 
 Skeleton (LeetCode style):
 
@@ -312,7 +312,7 @@ public:
 
 **Q25.** **LeetCode 146** LRU Cache. `get` / `put` in O(1).
 
-**A25.** Hash map + doubly-linked list. Hash map O(1) lookup; list O(1) move-to-front / pop-tail. minikv [lru_cache.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/lru_cache.h) uses `unordered_map + list` — same idea.
+**A25.** Hash map + doubly-linked list. Hash map O(1) lookup; list O(1) move-to-front / pop-tail. minikv [lru_cache.h](../../../minikv/src/utils/lru_cache.h) uses `unordered_map + list` — same idea.
 
 ```cpp
 class LRUCache {
@@ -362,7 +362,7 @@ LSM-Tree picks SkipList for MemTable: simple impl, range-scan friendly, fine loc
 
 **Q29.** Why does consistent hashing need virtual nodes?
 
-**A29.** With few nodes, data skew is severe (e.g. 3 nodes unevenly placed on the ring, one might own 60% of keys). Virtual nodes: each physical node maps to 150-200 virtual points on the ring — much more uniform. skynet [load_balancer.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/proxy/load_balancer.h) `ConsistentHashLB(vnodes=160)`.
+**A29.** With few nodes, data skew is severe (e.g. 3 nodes unevenly placed on the ring, one might own 60% of keys). Virtual nodes: each physical node maps to 150-200 virtual points on the ring — much more uniform. skynet [load_balancer.h](../../../skynet/include/skynet/proxy/load_balancer.h) `ConsistentHashLB(vnodes=160)`.
 
 **Q30.** MurmurHash2 vs SHA1/CRC32? Why does an LSM-Tree use MurmurHash2 internally?
 
@@ -400,7 +400,7 @@ LSM-Tree picks SkipList for MemTable: simple impl, range-scan friendly, fine loc
 
 **Q34.** Why is the SSTable file format designed this way? What's the minikv format?
 
-**A34.** Design goals: single sequential read, O(log) point lookup, range-scan friendly, support index & bloom. minikv [sstable_builder.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/sstable_builder.h):
+**A34.** Design goals: single sequential read, O(log) point lookup, range-scan friendly, support index & bloom. minikv [sstable_builder.h](../../../minikv/src/core/sstable_builder.h):
 ```
 [DataBlock1][DataBlock2]...[DataBlockN]
 [IndexBlock]
@@ -429,7 +429,7 @@ DataBlock: `[crc(4)][physical_size(4)][uncompressed_size(4)][type(1)][payload]`,
 
 **A36.**
 - MVCC: each row carries a version (seq); reads see only the latest version ≤ snapshot_seq.
-- minikv [internal_key.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/internal_key.h): `[user_key | trailer(8)]`, trailer = `(seq << 8) | type`.
+- minikv [internal_key.h](../../../minikv/src/core/internal_key.h): `[user_key | trailer(8)]`, trailer = `(seq << 8) | type`.
 - Sort: user_key ascending; same user_key → seq descending (newest first).
 - Read: scan to the first row matching user_key — that's the latest version.
 
@@ -442,7 +442,7 @@ DataBlock: `[crc(4)][physical_size(4)][uncompressed_size(4)][type(1)][payload]`,
 
 **Q38.** What problem does Manifest persistence solve? How does minikv do it?
 
-**A38.** Manifest records Version metadata (which SSTables belong to which level). On restart, replay Manifest to rebuild Version — otherwise existing SSTables are lost. minikv [manifest.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/manifest.h):
+**A38.** Manifest records Version metadata (which SSTables belong to which level). On restart, replay Manifest to rebuild Version — otherwise existing SSTables are lost. minikv [manifest.h](../../../minikv/src/core/manifest.h):
 - Append-only: `[crc(4)][size(4)][payload]` per record (add/del/reset).
 - Restart replays Manifest to rebuild Version.
 - Torn-write tolerant: tail record with bad CRC is ignored.
@@ -495,7 +495,7 @@ epoll stores all fds in a RB-tree; ready fds enter a ready list; `epoll_wait` re
 - LT: keep triggering as long as fd has data; every `epoll_wait` returns it. Simple.
 - ET: trigger once on state change; must read until EAGAIN. Efficient (fewer `epoll_wait` calls) but error-prone.
 - ET must use non-blocking fd + loop read; otherwise partial data + no future trigger → deadlock.
-- minikv [io_context.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/net/io_context.h) defaults to LT — simple and robust.
+- minikv [io_context.h](../../../skynet/include/skynet/net/io_context.h) defaults to LT — simple and robust.
 
 **Q44.** Reactor pattern? Why main reactor + sub reactor?
 
@@ -543,7 +543,7 @@ HTTP/3 uses QUIC (reliable transport over UDP) to solve TCP HoL blocking; 0-RTT 
 
 **Q49.** What are the states in the skynet HTTP parser state machine? Why use a state machine?
 
-**A49.** States: `kMethod → kPath → kVersion → kHeaderName → kHeaderValue → kBody → kDone` (see [parser.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/http/parser.h)). Advantages:
+**A49.** States: `kMethod → kPath → kVersion → kHeaderName → kHeaderValue → kBody → kDone` (see [parser.h](../../../skynet/include/skynet/http/parser.h)). Advantages:
 - Streaming: `feed` can be called multiple times — fits epoll incremental reads.
 - Boundary handling: each byte branches by state — no need to buffer the whole request.
 - Error localization: parse failures point at the failed state.
@@ -789,17 +789,17 @@ public:
 
 | Interview theme | TitanKV module | Key source | Course module |
 |---|---|---|---|
-| C++ basics | Slice / Status / Varint | [slice.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/slice.h), [status.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/include/minikv/status.h), [coding.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/coding.h) | M02 |
-| C++ concurrency | SkipList / ThreadPool / LRUCache | [skip_list.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h), [thread_pool.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/thread_pool.h), [lru_cache.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/lru_cache.h) | M03 |
-| Go / TS | gateway / web | (planned) | M04 / M12 |
-| SkipList | MemTable | [skip_list.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h) | M05 |
-| Bloom / Hash | BloomFilter / MurmurHash | [bloom_filter.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/bloom_filter.h), [hash.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/hash.h) | M06 |
-| LSM-Tree | DBImpl / SSTable | [db_impl.cpp](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.cpp), [sstable_builder.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/sstable_builder.h) | M07 |
-| Compaction / MVCC | CompactionManager / InternalKey | [compaction.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/compaction.h), [internal_key.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/internal_key.h) | M08 |
-| epoll / coroutines | IOContext / Task | [io_context.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/net/io_context.h), [task.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/core/task.h) | M09 |
-| HTTP / proxy | HttpParser / LoadBalancer | [parser.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/http/parser.h), [load_balancer.h](file:///c:/Users/Administrator/Desktop/hellocpp/skynet/include/skynet/proxy/load_balancer.h) | M10 |
-| Raft / sharding | distributed/ | (planned) | M11 |
-| Go microservices | gateway / services | (planned) | M12 |
+| C++ basics | Slice / Status / Varint | [slice.h](../../../minikv/include/minikv/slice.h), [status.h](../../../minikv/include/minikv/status.h), [coding.h](../../../minikv/src/utils/coding.h) | M02 |
+| C++ concurrency | SkipList / ThreadPool / LRUCache | [skip_list.h](../../../minikv/src/core/skip_list.h), [thread_pool.h](../../../minikv/src/utils/thread_pool.h), [lru_cache.h](../../../minikv/src/utils/lru_cache.h) | M03 |
+| Go / TS | gateway / web | `gateway/` / `web/` / `services/` | M04 / M12 |
+| SkipList | MemTable | [skip_list.h](../../../minikv/src/core/skip_list.h) | M05 |
+| Bloom / Hash | BloomFilter / MurmurHash | [bloom_filter.h](../../../minikv/src/core/bloom_filter.h), [hash.h](../../../minikv/src/utils/hash.h) | M06 |
+| LSM-Tree | DBImpl / SSTable | [db_impl.cpp](../../../minikv/src/core/db_impl.cpp), [sstable_builder.h](../../../minikv/src/core/sstable_builder.h) | M07 |
+| Compaction / MVCC | CompactionManager / InternalKey | [compaction.h](../../../minikv/src/core/compaction.h), [internal_key.h](../../../minikv/src/core/internal_key.h) | M08 |
+| epoll / coroutines | IOContext / Task | [io_context.h](../../../skynet/include/skynet/net/io_context.h), [task.h](../../../skynet/include/skynet/core/task.h) | M09 |
+| HTTP / proxy | HttpParser / LoadBalancer | [parser.h](../../../skynet/include/skynet/http/parser.h), [load_balancer.h](../../../skynet/include/skynet/proxy/load_balancer.h) | M10 |
+| Raft / sharding | distributed/ | `distributed/` / `cmd/raft` | M11 |
+| Go microservices | gateway / services | `services/*` + RAG | M12 |
 
 ---
 

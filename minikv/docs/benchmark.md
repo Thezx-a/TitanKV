@@ -23,7 +23,7 @@
 | PUT  | **10961** | 91.2 µs |
 | GET  | **3352** | 298.4 µs |
 
-说明：上表是 **2026-08-07 单线程 Reactor** 时的单连接同步请求。此后 `minikv_server` 已改为 main + sub Reactor（默认 `--io-threads 4`），并接入 Block Cache + L1+ Compaction + waitFlush。重跑：
+说明：上表是 **2026-08-07 单线程 Reactor** 时的单连接同步请求。此后已改为 main + sub Reactor（默认 `--io-threads 4` / `--biz-threads 4`），并接入 BlockCache、MemTable `shared_ptr` 锁外读、L1+ Compaction、waitFlush。重跑：
 
 ```bash
 make cmake-build

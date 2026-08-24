@@ -59,6 +59,22 @@ graph TB
 
 ---
 
+
+### TitanKV Front Proxy (`skynet_gateway`)
+
+In the TitanKV monorepo, `skynet/gateway` is the **public :8080** reverse proxy in front of Gin `:18080`:
+
+- epoll **edge-triggered** + C++20 coroutines (`io_awaitable.h`)
+- Main reactor accepts; Sub reactors (`listen.threads`) run `handleClient` coroutines
+- After a full HTTP request is read, LoadBalancer picks Gin (or other upstreams)
+- JWT / rate-limit / RBAC stay in Gin — skynet only proxies
+
+```bash
+# from repo root
+make run-skynet      # or included in make run-all
+make smoke-skynet
+```
+
 ## Coroutine Flow
 
 ```mermaid

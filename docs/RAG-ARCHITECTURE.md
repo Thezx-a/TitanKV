@@ -1,8 +1,9 @@
 # TitanKV × RAG — 架构层级图与项目讲解
 
-> 版本：v1.0
-> 状态：已落地实现 (WSL: `/root/hellocpp`)
-> 关联方案：`/root/hellocpp/RagKv.md` (v2.0)
+> 版本：v1.1
+> 状态：已落地（随 `make run-all` 启动，默认 :8085）
+> 关联方案：[`RagKv.md`](../RagKv.md) (v2.0)
+> 仓库根：`SpectrumCore` / TitanKV
 > 编译验证：`go build ./services/... ./gateway/...` 通过；`tsc --noEmit` 通过
 
 本文档面向"已读 RagKv.md 但想看实际落地版"的读者，包含：架构层级图、各层职责、关键代码定位、数据流、KV Key 设计、接口契约、权限模型、启动流程、面试口述要点。
@@ -15,12 +16,14 @@
 
 核心原则（与方案一致）：
 - **不引入第二套存储**：向量检索用 side index (内存 + 快照)，文本/chunk/会话/任务全部走 minikv TCP。
-- **不修改 minikv 核心**：第一阶段不动 C++ 引擎，避免打乱已完成的存储主线。
+- **不改动 minikv 协议/API**：RAG 只通过现有 TCP Put/Get/Delete/Scan 消费引擎；引擎侧已有的 BlockCache / MemTable `shared_ptr` 等升级对 RAG 透明。
 - **不另起权限体系**：扩展原有 RBAC，新增 `rag:ingest` / `rag:query` 两个权限。
 
 ---
 
 ## 2. 架构层级图
+
+> 架构图：[`docs/layers/architecture.svg`](layers/architecture.svg)（最新）· 分层详解 [`docs/layers/index.html`](layers/index.html) · 示意 PNG：[`RAG-ARCHITECTURE.png`](RAG-ARCHITECTURE.png) / [`SKYNET-DETAIL.png`](SKYNET-DETAIL.png)（若滞后以 Mermaid/源码为准）
 
 ### 2.1 系统层级图 (Mermaid)
 
@@ -31,7 +34,7 @@ flowchart TB
     end
 
     subgraph Edge["接入层"]
-        Skynet["skynet C++20 协程前置<br/>(:8080 可选 SSE 透传)"]
+        Skynet["skynet 前置 :8080<br/>epoll ET + C++20 协程主从 Reactor"]
     end
 
     subgraph Gateway["API 网关层 (Go Gin :18080 / :8080)"]
@@ -50,7 +53,7 @@ flowchart TB
     subgraph Storage["存储层"]
         MiniKVServer["minikv_server<br/>(TCP :8888)"]
         MiniKV["minikv 引擎<br/>WAL / MemTable / SST<br/>BloomFilter / LRU / snappy"]
-        SideIndex["向量 side index<br/>(rag 服务内存)<br/>+ 本地快照文件"]
+        SideIndex["向量 side index<br/>默认 HNSW（可 brute）<br/>+ 本地快照文件"]
     end
 
     Web -->|HTTP / SSE| Skynet
@@ -78,7 +81,7 @@ flowchart TB
 └──────────────────────────────┬─────────────────────────────────────┘
                                │ HTTP / SSE (Bearer JWT)
 ┌──────────────────────────────▼─────────────────────────────────────┐
-│  Gateway (Gin)  :8080                                              │
+│  Gateway：对外 skynet :8080 → Gin :18080（run-all）/ 单独 Gin :8080   │
 │  中间件链: RequestID → Logger → Recover → RateLimit → Auth → RBAC  │
 │  反向代理分组:                                                     │
 │    /api/data    → DataServiceURL                                   │
@@ -96,7 +99,7 @@ flowchart TB
                                                           │
                                 ┌─────────────────────────▼──────────┐
                                 │   minikv_server TCP (:8888)        │
-                                │   (现有，未改动)                   │
+                                │   LSM + BlockCache + 主从 Reactor │
                                 └─────────────────┬──────────────────┘
                                                   │ C++ DB::open/put/write/Iterator
                                 ┌─────────────────▼──────────────────┐
@@ -108,8 +111,8 @@ flowchart TB
 
                                 ┌────────────────────────────────────┐
                                 │  Vector Side Index (rag 进程内)    │
-                                │  chunk_id → float32[dim]            │
-                                │  内存 cosine TopK + 定时/手动快照   │
+                                │  默认 HNSW（可 brute）；chunk_id→vec │
+                                │  内存索引 + 本地快照文件            │
                                 └────────────────────────────────────┘
 ```
 
@@ -121,7 +124,10 @@ services/rag/
 ├── config.go            ← LoadConfig() 从 env 读取 (RAG_ADDR/MINIKV_ADDR/OPENAI_*)
 ├── handler.go           ← HTTP 路由 + Service 注册 (IngestDocument/List/Retrieve/Chat/...)
 ├── store.go             ← minikv 客户端封装 + RAG Key 编码 + 文档 CRUD
-├── vector_index.go      ← SideIndex: 内存 cosine TopK + 快照 (SaveSnapshotPrefix/MergeSnapshot)
+├── vector_index.go      ← SideIndex 抽象 + brute cosine TopK + 快照
+├── hnsw_index.go        ← 默认向量索引 (RAG_INDEX_TYPE=hnsw)
+├── rerank.go            ← 可选 rerank
+├── eval.go / eval_test  ← 检索评测辅助
 ├── embedding.go         ← Embedding Provider 抽象 (Hash mock + OpenAI) + 缓存
 ├── chunker.go           ← 固定窗口切块 (按字符/token，可配 chunk_size + overlap)
 ├── ingest.go            ← 文档入库编排 (清洗/去重/切块/embed/持久化/更新索引)
@@ -139,13 +145,13 @@ services/rag/
 
 **职责**：所有 RAG 文本/chunk/会话/任务的持久化。**不存向量**，向量进 side index。
 **复用方式**：rag 服务通过 `services/data.MiniKVClient` 同款 TCP 协议 (`Put/Get/Delete/Scan`) 访问。
-**未改动**：本阶段不动 minikv 核心，只是消费它已有的 Iterator Seek 前缀扫描 + WriteBatch 原子写能力。
+**引擎侧**：RAG 不直接改 C++ 代码；持久化复用 Iterator Seek 前缀扫描 + WriteBatch。minikv 已落地 BlockCache（解压后 data block LRU）与 MemTable `shared_ptr` 锁外读，对 RAG 透明。
 
 ### 3.2 业务服务层：services/rag (Go)
 
 **职责**：把"文档 → embedding → chunk 入库 → 检索 → 流式问答"全流程编排起来。
-**入口**：[services/rag/cmd/main.go](file:///root/hellocpp/services/rag/cmd/main.go)
-**路由注册**：[services/rag/handler.go](file:///root/hellocpp/services/rag/handler.go) `RegisterRoutes`
+**入口**：[services/rag/cmd/main.go](file://../services/rag/cmd/main.go)
+**路由注册**：[services/rag/handler.go](file://../services/rag/handler.go) `RegisterRoutes`
 
 | 路由 | Handler | 权限 | 说明 |
 |---|---|---|---|
@@ -162,7 +168,7 @@ services/rag/
 ### 3.3 网关层：gateway (Go Gin)
 
 **职责**：统一鉴权、限流、RBAC、反向代理。
-**关键扩展点**：[gateway/router.go](file:///root/hellocpp/gateway/router.go)
+**关键扩展点**：[gateway/router.go](file://../gateway/router.go)
 - `Config` 新增 `RAGServiceURL`，env `RAG_SERVICE_URL`，默认 `http://localhost:8085`
 - 反向代理 map 加入 `"/api/rag": cfg.RAGServiceURL`
 - 新增中间件 `ragRBAC`：
@@ -174,7 +180,7 @@ services/rag/
 ### 3.4 元数据层：services/meta (Go)
 
 **职责**：管理 Collection 元数据，扩展支持 `type=rag`。
-**关键扩展点**：[services/meta/store.go](file:///root/hellocpp/services/meta/store.go)
+**关键扩展点**：[services/meta/store.go](file://../services/meta/store.go)
 - `Collection` 新增字段：`Type string` (`"kv"` | `"rag"`) 和 `RagConfig *RagCollectionConfig`
 - `RagCollectionConfig` 字段：embedding_model / embedding_dim / distance_metric / chunk_size / chunk_overlap / top_k_default / rerank_enabled / allowed_file_types / max_doc_size_mb / owner / visibility
 - `validateCollection` 校验 type 与 rag_config 一致：`type=rag` 必须带 rag_config；`type=kv` 不允许带 rag_config
@@ -185,12 +191,12 @@ services/rag/
 **职责**：知识库管理 + 流式问答 UI。
 | 文件 | 作用 |
 |---|---|
-| [web/lib/types.ts](file:///root/hellocpp/web/lib/types.ts) | 扩展 `Collection.type`、新增 `RagCollectionConfig` / `DocumentMeta` / `ChunkRecord` / `IngestTask` / `RetrievalHit` / `ChatEvent` 等 |
-| [web/lib/rag.ts](file:///root/hellocpp/web/lib/rag.ts) | `ragApi` 封装：uploadDocument / ingestText / listDocuments / getDocument / deleteDocument / getTask / retrieve / chatStream (AsyncGenerator) |
-| [web/components/nav.tsx](file:///root/hellocpp/web/components/nav.tsx) | 侧边栏加 "知识库 (RG)" 入口 → `/dashboard/rag` |
-| [web/app/dashboard/rag/page.tsx](file:///root/hellocpp/web/app/dashboard/rag/page.tsx) | 知识库列表 + 创建表单 (type=rag) |
-| [web/app/dashboard/rag/\[col\]/page.tsx](file:///root/hellocpp/web/app/dashboard/rag/[col]/page.tsx) | 知识库详情：文档列表 + 上传 + 文本入库 + 删除 |
-| [web/app/dashboard/rag/\[col\]/chat/page.tsx](file:///root/hellocpp/web/app/dashboard/rag/[col]/chat/page.tsx) | 流式问答页：原生 fetch + ReadableStream 解析 SSE，渲染 token/citation/end/error |
+| [web/lib/types.ts](file://../web/lib/types.ts) | 扩展 `Collection.type`、新增 `RagCollectionConfig` / `DocumentMeta` / `ChunkRecord` / `IngestTask` / `RetrievalHit` / `ChatEvent` 等 |
+| [web/lib/rag.ts](file://../web/lib/rag.ts) | `ragApi` 封装：uploadDocument / ingestText / listDocuments / getDocument / deleteDocument / getTask / retrieve / chatStream (AsyncGenerator) |
+| [web/components/nav.tsx](file://../web/components/nav.tsx) | 侧边栏加 "知识库 (RG)" 入口 → `/dashboard/rag` |
+| [web/app/dashboard/rag/page.tsx](file://../web/app/dashboard/rag/page.tsx) | 知识库列表 + 创建表单 (type=rag) |
+| [web/app/dashboard/rag/\[col\]/page.tsx](file://../web/app/dashboard/rag/[col]/page.tsx) | 知识库详情：文档列表 + 上传 + 文本入库 + 删除 |
+| [web/app/dashboard/rag/\[col\]/chat/page.tsx](file://../web/app/dashboard/rag/[col]/chat/page.tsx) | 流式问答页：原生 fetch + ReadableStream 解析 SSE，渲染 token/citation/end/error |
 
 **SSE 实现要点**：`ragApi.chatStream` 用 `async function*` 生成器消费 fetch 流，逐行解析 `event: xxx` / `data: {...}`，绕开 `EventSource`（不支持 POST + 自定义 Header）。
 
@@ -356,7 +362,7 @@ client.Write(batch)  // 一次系统调用，WAL 一次 fsync
 
 ### 7.1 新增权限
 
-[gateway/middleware/rbac.go](file:///root/hellocpp/gateway/middleware/rbac.go) 新增：
+[gateway/middleware/rbac.go](file://../gateway/middleware/rbac.go) 新增：
 
 ```go
 PermRAGIngest Permission = "rag:ingest" // 文档入库 / 删除 / 索引快照

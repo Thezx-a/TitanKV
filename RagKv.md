@@ -1,8 +1,8 @@
 # TitanKV × RAG 知识库 — 深度结合 minikv 的详细实施计划
 
-> 版本：v2.0  
-> 状态：规划文档，暂不改动现有代码  
-> 目标：在 TitanKV 现有四层栈上，以 minikv 的原生能力（Iterator Seek 前缀扫描 / WriteBatch 原子写 / 压缩 / BloomFilter / LRU Cache）为持久化底座，构建一个完整可运行的 RAG 知识库闭环。
+> 版本：v2.1  
+> 状态：**已落地**（见 `services/rag/`、`make run-rag` / `make run-all`、落地说明 [`docs/RAG-ARCHITECTURE.md`](docs/RAG-ARCHITECTURE.md)）  
+> 目标：在 TitanKV 现有四层栈上，以 minikv 的原生能力（Iterator Seek 前缀扫描 / WriteBatch 原子写 / 压缩 / BloomFilter / BlockCache）为持久化底座，构建完整可运行的 RAG 知识库闭环。本文保留为设计依据；实现细节以源码与 RAG-ARCHITECTURE 为准。
 
 ---
 

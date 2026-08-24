@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TitanKV · 分层知识图谱</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">TitanKV <small>分层知识图谱</small></div>
+    <nav>
+      <a href="#layers">分层总览</a>
+      <a href="#flow">请求链路</a>
+      <a href="#stack">技术栈</a>
+      <a href="#analysis">设计分析</a>
+      <a href="https://github.com/Thezx-a/TitanKV" target="_blank" rel="noopener">源码 ↗</a>
+    </nav>
+  </div>
+</header>
+
+<main class="shell">
+
+  <section class="hero">
+    <div class="eyebrow">A distributed key-value platform · built from scratch</div>
+    <h1>从一行 <code>db.Put()</code> 到前端实时刷新<br/>每一层都讲得清楚。</h1>
+    <p class="lede">
+      TitanKV 是一个从存储引擎、网络库、网关、微服务到前端控制台完整重写的分布式键值平台。
+      本图谱把项目拆成八层，逐层梳理核心知识点、竖向调用链、崩溃恢复与设计取舍——
+      不是堆技术名词，而是把每一行关键代码讲明白。
+    </p>
+    <div class="hero-meta">
+      <span><span class="dot"></span>C++17/20 存储与协程</span>
+      <span><span class="dot"></span>Go 1.23 网关与微服务</span>
+      <span><span class="dot"></span>Next.js 14 控制台</span>
+      <span><span class="dot"></span>Docker / Prometheus / Jaeger</span>
+    </div>
+    <figure class="hero-figure">
+      <img alt="TitanKV 数据流总览" src="architecture.svg" />
+    </figure>
+  </section>
+
+  <h2 id="layers">分层总览</h2>
+  <p>请求自上而下穿过客户端、前置、网关、微服务，最终落到 C++ 存储引擎；可观测性组件横切所有层。点击任一卡片进入该层详细知识点、竖向调用链与设计分析。</p>
+
+  <div class="layer-grid">
+
+    <a class="layer-card" href="client.html">
+      <span class="num">L1 · 客户端层</span>
+      <span class="title">Client Layer</span>
+      <p class="sub">Next.js 控制台 · Cobra CLI · Go SDK</p>
+      <div class="tags"><span class="tag">App Router</span><span class="tag">TanStack Query</span><span class="tag">titan SDK</span></div>
+      <span class="arrow">→</span>
+    </a>
+
+    <a class="layer-card" href="network.html">
+      <span class="num">L2 · 前置接入 / 网络库</span>
+      <span class="title">Skynet (C++20)</span>
+      <p class="sub">epoll ET · 协程化 IO · HTTP 解析 · 负载均衡</p>
+      <div class="tags"><span class="tag">coroutine</span><span class="tag">io_context</span><span class="tag">WRR/LeastConn/CH</span></div>
+      <span class="arrow">→</span>
+    </a>
+
+    <a class="layer-card" href="gateway.html">
+      <span class="num">L3 · 网关层</span>
+      <span class="title">API Gateway (Go + Gin)</span>
+      <p class="sub">洋葱中间件链 · JWT/RBAC/APIKey · 反向代理</p>
+      <div class="tags"><span class="tag">RequestID</span><span class="tag">RateLimit</span><span class="tag">Auth→RBAC</span></div>
+      <span class="arrow">→</span>
+    </a>
+
+    <a class="layer-card" href="services.html">
+      <span class="num">L4 · 微服务层</span>
+      <span class="title">Services (Go)</span>
+      <p class="sub">Auth / Data / Meta / Observability / RAG</p>
+      <div class="tags"><span class="tag">JWT+bcrypt</span><span class="tag">HNSW</span><span class="tag">RAG 全链路</span></div>
+      <span class="arrow">→</span>
+    </a>
+
+    <a class="layer-card" href="distributed.html">
+      <span class="num">L5 · 分布式层</span>
+      <span class="title">Distributed</span>
+      <p class="sub">hashicorp/raft · KVFSM · 一致性哈希分片</p>
+      <div class="tags"><span class="tag">Raft Apply</span><span class="tag">Snapshot/Restore</span><span class="tag">教学单节点</span></div>
+      <span class="arrow">→</span>
+    </a>
+
+    <a class="layer-card" href="storage.html">
+      <span class="num">L6 · 存储引擎层</span>
+      <span class="title">MiniKV (C++17 LSM-Tree)</span>
+      <p class="sub">WAL · MemTable(跳表) · SSTable · Compaction · MVCC</p>
+      <div class="tags"><span class="tag">BlockCache</span><span class="tag">shared_ptr</span><span class="tag">Group Commit</span><span class="tag">主从 Reactor</span></div>
+      <span class="arrow">→</span>
+    </a>
+
+    <a class="layer-card" href="observability.html">
+      <span class="num">L7 · 可观测性</span>
+      <span class="title">Observability Stack</span>
+      <p class="sub">横切所有层：Prometheus · Grafana · Jaeger · Redis</p>
+      <div class="tags"><span class="tag">/metrics</span><span class="tag">分布式追踪</span><span class="tag">限流+jti 黑名单</span></div>
+      <span class="arrow">→</span>
+    </a>
+
+    <a class="layer-card" href="web.html">
+      <span class="num">L8 · 前端控制台</span>
+      <span class="title">Web Console (Next.js 14)</span>
+      <p class="sub">App Router · 鉴权中间件 · SSE 流式 · Tailwind</p>
+      <div class="tags"><span class="tag">apiFetch</span><span class="tag">cookie titan_token</span><span class="tag">401 跳登录</span></div>
+      <span class="arrow">→</span>
+    </a>
+
+  </div>
+
+  <h2 id="flow">请求链路 · 竖向调用链</h2>
+  <p>一条 <code>PUT /api/data/kv/foo</code> 从浏览器到 LSM-Tree 落盘的完整竖向路径。每一格对应上面某一层，进入该层详细页可看到更细的竖向调用链与崩溃恢复分析。</p>
+
+  <div class="vflow">
+    <div class="vstep">
+      <div class="vnode">1</div>
+      <div class="vbody">
+        <p class="vtitle">浏览器 · Next.js Console <span class="vtag safe">L1/L8</span></p>
+        <p class="vdesc">用户在 dashboard/data 页提交表单，<code>apiFetch</code> 读取 <code>titan_token</code> cookie 并注入 <code>Authorization: Bearer</code>。</p>
+        <p class="vdetail"><strong>关键：</strong>cookie 同源、middleware.ts 已在路由层校验过 token；401 时 apiFetch 自动清 cookie 跳 /login。</p>
+      </div>
+    </div>
+    <div class="vstep">
+      <div class="vnode">2</div>
+      <div class="vbody">
+        <p class="vtitle">Skynet 前置 :8080 <span class="vtag safe">L2</span></p>
+        <p class="vdesc">C++20 协程 accept 循环接收连接，epoll ET 边沿触发，HTTP 增量状态机解析请求。</p>
+        <p class="vdetail"><strong>关键：</strong>skynet 不做 JWT/限流；Main accept + Sub 协程 epoll ET 读完 HTTP 后 LB 选 Gin :18080；支持 SSE 穿透（RAG chat）。</p>
+      </div>
+    </div>
+    <div class="vstep">
+      <div class="vnode">3</div>
+      <div class="vbody">
+        <p class="vtitle">Gin Gateway :18080 · 洋葱中间件 <span class="vtag safe">L3</span></p>
+        <p class="vdesc">RequestID → Logger → Recover → RateLimit(Redis 令牌桶) → Auth(解 JWT/APIKey) → RBAC(检查 kv:put)。</p>
+        <p class="vdetail"><strong>关键：</strong>Auth 在 RBAC 之前（先识别身份再判权限）；alg:none 防御；jti 黑名单 Redis 故障时放行。</p>
+      </div>
+    </div>
+    <div class="vstep">
+      <div class="vnode">4</div>
+      <div class="vbody">
+        <p class="vtitle">反向代理 · 注入身份头 <span class="vtag safe">L3</span></p>
+        <p class="vdesc">按 <code>/api/data</code> 前缀选目标，注入 <code>X-User-ID / X-Role / X-Request-ID</code> 后转发到 Data 服务 :8081。</p>
+        <p class="vdetail"><strong>关键：</strong>后端拿到身份无需再解 JWT；无匹配前缀返回 404。</p>
+      </div>
+    </div>
+    <div class="vstep">
+      <div class="vnode">5</div>
+      <div class="vbody">
+        <p class="vtitle">Data 服务 :8081 · KV 写入 <span class="vtag safe">L4</span></p>
+        <p class="vdesc">Handler 接收请求，经 <code>minikv_client</code> 通过 <code>MINIKV_ADDR</code> 原生 TCP 协议把 KV 对发给 minikv_server。</p>
+        <p class="vdetail"><strong>关键：</strong>无 MINIKV_ADDR 时回退内存 store；规划中 gRPC/cgo 为后续增强。</p>
+      </div>
+    </div>
+    <div class="vstep alt">
+      <div class="vnode">R</div>
+      <div class="vbody">
+        <p class="vtitle">RAG 路径（旁路）· services/rag :8085 <span class="vtag safe">L4</span></p>
+        <p class="vdesc">文档入库/检索/问答走 <code>/api/rag/*</code>，直连 minikv TCP；向量 HNSW 在 rag 进程 side index。</p>
+        <p class="vdetail"><strong>关键：</strong>RAG 热路径不经过 Data 服务；skynet/Gin 仍负责鉴权与 SSE。</p>
+      </div>
+    </div>
+    <div class="vstep">
+      <div class="vnode">6</div>
+      <div class="vbody">
+        <p class="vtitle">minikv_server · 主从 Reactor <span class="vtag safe">L6</span></p>
+        <p class="vdesc">主 Reactor accept，按 round-robin 分发到 Sub Reactor (io_pool)，业务丢 biz_pool 执行 <code>processRequest</code>。</p>
+        <p class="vdetail"><strong>关键：</strong>IO 与业务解耦；biz_threads=0 时在 IO 线程内同步处理。</p>
+      </div>
+    </div>
+    <div class="vstep">
+      <div class="vnode">7</div>
+      <div class="vbody">
+        <p class="vtitle">DBImpl::put · Group Commit <span class="vtag safe">L6</span></p>
+        <p class="vdesc">写线程组队（≤32 条，超时 500μs），leader 批量追加 WAL 并 fsync，follower 等待 group_cv_。</p>
+        <p class="vdetail"><strong>关键：</strong>WAL fsync 返回前崩溃 → 这条写入丢失但一致；Group Commit 摊销 fsync 开销。</p>
+      </div>
+    </div>
+    <div class="vstep">
+      <div class="vnode">8</div>
+      <div class="vbody">
+        <p class="vtitle">MemTable::put · SkipList 插入 <span class="vtag safe">L6</span></p>
+        <p class="vdesc">写锁下插入跳表（kMaxLevel=32，randomLevel 0.5 概率），InternalKey = user_key + trailer(seq+type)。</p>
+        <p class="vdetail"><strong>关键：</strong>MemTable 超过 write_buffer_size → 冻结入 immutable_list_，触发后台 flush。</p>
+      </div>
+    </div>
+    <div class="vstep">
+      <div class="vnode">9</div>
+      <div class="vbody">
+        <p class="vtitle">后台 flush 线程 · 刷盘 SSTable <span class="vtag warn">L6</span></p>
+        <p class="vdesc">flush_thread_ 从 flush_queue_ 取出，SkipList 扫描 → SSTableBuilder → Version::addLevelFile(L0) → unlink 旧 WAL。</p>
+        <p class="vdetail"><strong>关键：</strong>写路径不等待 SSTable 构建；flush 失败时 immutable 仍可见，重试。</p>
+      </div>
+    </div>
+    <div class="vstep">
+      <div class="vnode alt">10</div>
+      <div class="vbody">
+        <p class="vtitle">Compaction · L0 → L1 合并 <span class="vtag warn">L6</span></p>
+        <p class="vdesc">独立后台线程 compactionLoop，L0 文件数 ≥ l0_trigger 触发，mergeLevelFiles 去重 + 清 tombstone。</p>
+        <p class="vdetail"><strong>关键：</strong>合并到更深一层才安全清 tombstone；失败下轮重试；Manifest 记录版本。</p>
+      </div>
+    </div>
+  </div>
+
+  <figure class="figure wide arch-svg-wrap"><img alt="TitanKV 分层架构图" src="architecture.svg" style="width:100%;height:auto"/><figcaption class="figcap">图：请求竖向穿过八层</figcaption></figure>
+
+  <h2 id="stack">技术栈与构建入口</h2>
+
+  <table class="kp">
+    <thead><tr><th>层</th><th>语言 / 框架</th><th>关键目录</th><th>构建 / 运行</th></tr></thead>
+    <tbody>
+      <tr><td>客户端</td><td>Next.js 14 · Cobra · Go SDK</td><td><code>web/</code> <code>client-cli/</code> <code>client-go/titan/</code></td><td><code>make web-dev</code></td></tr>
+      <tr><td>前置 / 网络库</td><td>C++20 协程 · epoll ET</td><td><code>skynet/</code></td><td><code>cmake --build build</code></td></tr>
+      <tr><td>网关</td><td>Go 1.23 · Gin</td><td><code>gateway/</code></td><td><code>make run-gateway</code></td></tr>
+      <tr><td>微服务</td><td>Go 1.23</td><td><code>services/{auth,data,meta,observability,rag}/</code></td><td><code>make run-all</code></td></tr>
+      <tr><td>分布式</td><td>Go · hashicorp/raft</td><td><code>distributed/</code></td><td>教学单节点</td></tr>
+      <tr><td>存储引擎</td><td>C++17 LSM-Tree</td><td><code>minikv/src/core/</code></td><td><code>ctest --test-dir build</code></td></tr>
+      <tr><td>可观测性</td><td>Prometheus / Grafana / Jaeger / Redis</td><td><code>deploy/dev/</code> <code>pkg/metrics/</code></td><td><code>make docker-up</code></td></tr>
+      <tr><td>存储 TCP</td><td>C++17</td><td><code>minikv_server</code></td><td><code>:8888</code></td></tr>
+      <tr><td>统一入口</td><td>—</td><td><code>Makefile</code></td><td><code>make run-all</code> → skynet :8080</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="analysis">设计分析速览</h2>
+  <p>每一层详细页都含「设计深度分析」章节，覆盖崩溃恢复场景、设计取舍、优缺点与优化方案。下面是几个高频追问的速览：</p>
+
+  <div class="callout">
+    <span class="ctitle">为什么 MemTable 用跳表不用红黑树？</span>
+    跳表与红黑树都是 O(log n) 有序结构，但跳表实现简单（无旋转）、并发友好（读写锁粒度小、可无锁迭代）、概率平衡（无需重平衡）、对缓存与范围扫描更友好；红黑树旋转复杂、并发难、实现易错。LevelDB/RocksDB 也选跳表。详见 <a href="storage.html#analysis">存储引擎设计分析</a>。
+  </div>
+  <div class="callout">
+    <span class="ctitle">为什么 skynet 用 epoll ET + 协程，而不是 LT + 回调？</span>
+    ET 边沿触发 + 一次性 <code>watchOnce</code> 避免重复通知，协程化让 IO 代码线性可读；LT 模式需手动管理 level 触发易忙轮询。代价是 ET 必须一次读完，skynet 用 readExact/readUntil 兜底。详见 <a href="network.html#analysis">网络库设计分析</a>。
+  </div>
+  <div class="callout">
+    <span class="ctitle">为什么 Raft FSM 的 WriteForwarder 不能让 Apply 失败？</span>
+    Raft 要求所有副本 Apply 相同日志得到相同状态。若把外部 IO（写 MiniKV）作为 Apply 的一部分且让它能失败，非确定性会让副本状态发散。所以 forwarder 只 best-effort 镜像，不影响 Apply。详见 <a href="distributed.html#analysis">分布式设计分析</a>。
+  </div>
+
+  <h2>项目状态</h2>
+  <table class="kp">
+    <thead><tr><th>Phase</th><th>内容</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td>仓库重构</td><td>✅ done</td></tr>
+      <tr><td>1</td><td>C++ 存储引擎（WAL/MemTable/SST/Compaction/MVCC）</td><td>✅ done</td></tr>
+      <tr><td>2</td><td>原生 TCP 接 minikv → Go Data（gRPC 仍规划）</td><td>✅ MVP done</td></tr>
+      <tr><td>3</td><td>Go 网关 + Auth（JWT/RBAC/APIKey）</td><td>✅ MVP done</td></tr>
+      <tr><td>4</td><td>Go data / meta / observability 服务</td><td>✅ MVP done</td></tr>
+      <tr><td>5</td><td>Raft 教学实验 + gateway/shard 分片辅助</td><td>✅ teaching MVP</td></tr>
+      <tr><td>6</td><td>Next.js 控制台（含 RAG/Cluster 页）</td><td>✅ MVP done</td></tr>
+      <tr><td>6.5</td><td>RAG 服务（HNSW + SSE chat）</td><td>✅ MVP done</td></tr>
+      <tr><td>7</td><td>K8s + CI/CD 全栈</td><td>⏳ planned</td></tr>
+      <tr><td>8</td><td>CLI keyforge MVP + 多语言 SDK</td><td>✅ CLI MVP / SDK planned</td></tr>
+    </tbody>
+  </table>
+
+  <div class="footer">
+    TitanKV · 分层知识图谱 · 仓库 <a href="https://github.com/Thezx-a/TitanKV">Thezx-a/TitanKV</a> 源码梳理 · MIT License
+  </div>
+
+</main>
+
+</body>
+</html>

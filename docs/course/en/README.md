@@ -110,7 +110,7 @@ flowchart TD
 | 08 | Compaction & MVCC | Storage Engine | `minikv/src/core/{compaction,internal_key,manifest}.cpp` | ⭐⭐⭐⭐ | 8h | Leveled vs Tiered / three amplifications / InternalKey encoding / Manifest / crash recovery | ✅ Done |
 | 09 | epoll & C++20 Coroutines | Networking | `skynet/src/net/` / `skynet/src/core/` | ⭐⭐⭐⭐⭐ | 10h | IO multiplexing / LT·ET / Reactor / co_await·promise_type / symmetric transfer / Executor | ✅ Done |
 | 10 | HTTP & Reverse Proxy | Networking | `skynet/src/http/` / `skynet/src/proxy/` | ⭐⭐⭐⭐ | 6h | HTTP/1.1 state machine / Router / connection pool / load balancing / health checks | ✅ Done |
-| 11 | Raft & Sharding | Distributed | `distributed/` (planned) / `services/meta/watcher.go` | ⭐⭐⭐⭐⭐ | 10h | Leader election / log replication / safety / Snapshot / PreVote / consistent-hash sharding | 🚧 In progress |
+| 11 | Raft & Sharding | Distributed | `distributed/` / `cmd/raft` / `services/meta/watcher.go` | ⭐⭐⭐⭐⭐ | 10h | Leader election / log replication / safety / Snapshot / PreVote / consistent-hash sharding | 🚧 In progress |
 | 12 | Go µServices & Next.js Console | Application | `services/` / `gateway/` / `web/` | ⭐⭐⭐⭐ | 8h | Gin gateway / JWT·RBAC·APIKey / gRPC / Next.js + TanStack Query + SSE dashboard | ✅ Done |
 | 13 | System Design & Interview Q&A | Interview | whole project + `tests/course/` | ⭐⭐⭐ | 6h | design KV / distributed lock / rate limiter / LeetCode 1206·146·460 / 50+ real questions / hand-write series | ✅ Done |
 | 14 | Rebuild the Entire Project | Reproduction | whole project (end-to-end) | ⭐⭐⭐⭐⭐ | 20h+ | project scaffold / subsystem split / CI / deployment / full-chain benchmark / résumé & interview walkthrough | 🚧 In progress |

@@ -155,7 +155,7 @@ flowchart TD
 
 ### 2.8 etcd 服务发现
 
-[deploy/dev/docker-compose.yml](file:///c:/Users/Administrator/Desktop/hellocpp/deploy/dev/docker-compose.yml) 起本地 etcd。etcd 用途：
+[deploy/dev/docker-compose.yml](../../../deploy/dev/docker-compose.yml) 起本地 etcd。etcd 用途：
 
 - **服务注册**：每个 TitanKV 节点启动注册到 etcd，PD 监听变更。
 - **配置分发**：路由表、shard 分配写入 etcd，客户端 watch。
@@ -216,3 +216,10 @@ flowchart TD
 ---
 
 ← [Module 10](./10-http-proxy.md)  |  下一模块：[Module 12 — Go 微服务与 Next.js 控制台](./12-go-nextjs.md) →
+
+## 最新仓库状态
+
+- `distributed/` 已落地教学用 hashicorp/raft（1-node Bootstrap、FSM Put/Del、Snapshot；`JoinCluster` 辅助多 voter 演示）。
+- 入口：`cmd/raft`（Raft :8090 / HTTP :8091 量级，以源码为准）；单测：`go test ./distributed/...`。
+- `gateway/shard.go` 提供分片辅助；**多机生产集群 / 自动 rebalance 仍为规划**，简历可不写 Raft。
+- 对照源码：`distributed/node.go`、`cluster.go`、`fsm.go`。

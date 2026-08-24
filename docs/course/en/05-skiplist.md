@@ -1,6 +1,6 @@
 # Module 05 — SkipList & Ordered Structures
 
-> Source: [skip_list.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h) (MemTable backend), [internal_key.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/internal_key.h)
+> Source: [skip_list.h](../../../minikv/src/core/skip_list.h) (MemTable backend), [internal_key.h](../../../minikv/src/core/internal_key.h)
 > LeetCode: [1206. Design Skiplist](https://leetcode.com/problems/design-skiplist/)
 
 ## Background & Motivation
@@ -64,7 +64,7 @@ flowchart LR
 
 ### 2.3 minikv's SkipList Implementation
 
-[skip_list.h:15-21](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h) defines the node:
+[skip_list.h:15-21](../../../minikv/src/core/skip_list.h) defines the node:
 
 ```cpp
 struct SkipNode {
@@ -80,7 +80,7 @@ Note `forward(level + 1, nullptr)`: level is 0-indexed, the count of levels is l
 
 ### 2.4 Search Algorithm
 
-[skip_list.h:68-79](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h):
+[skip_list.h:68-79](../../../minikv/src/core/skip_list.h):
 
 ```cpp
 std::optional<std::string> get(const std::string& key) const {
@@ -103,7 +103,7 @@ Flow: start at the top level `max_level_`, move right on each level to the great
 
 ### 2.5 Insert Algorithm
 
-[skip_list.h:38-66](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h):
+[skip_list.h:38-66](../../../minikv/src/core/skip_list.h):
 
 ```cpp
 void put(const std::string& key, const std::string& value) {
@@ -144,7 +144,7 @@ Key points:
 
 ### 2.6 Random Level
 
-[skip_list.h:125-131](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h):
+[skip_list.h:125-131](../../../minikv/src/core/skip_list.h):
 
 ```cpp
 int randomLevel() {
@@ -177,9 +177,9 @@ Mnemonic: **in-memory + high concurrency → SkipList; disk + read-heavy → B+t
 
 ### 2.8 Deletion and Memory Management
 
-`del` in [skip_list.h:81-101](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h): similarly uses `update[]` to find predecessors, unlinks per level, `delete`s the node, and shrinks `max_level_`.
+`del` in [skip_list.h:81-101](../../../minikv/src/core/skip_list.h): similarly uses `update[]` to find predecessors, unlinks per level, `delete`s the node, and shrinks `max_level_`.
 
-The destructor [skip_list.h:29-36](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h) walks the level-0 list and `delete`s each node — O(n) release. This is the cost of raw-pointer management; switching to a `unique_ptr` chain would be safer but adds complexity.
+The destructor [skip_list.h:29-36](../../../minikv/src/core/skip_list.h) walks the level-0 list and `delete`s each node — O(n) release. This is the cost of raw-pointer management; switching to a `unique_ptr` chain would be safer but adds complexity.
 
 ## 3. Thinking Questions
 
@@ -197,7 +197,7 @@ Without looking at the source, implement `Skiplist` with `search / add / erase` 
 
 ### Exercise 4.2 (Concurrency-Safe SkipList)
 
-Following [skip_list.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h), implement an RW-locked SkipList with `shared_mutex`. Benchmark: 10 threads each Put 100k keys + 10 threads each Get 100k keys; compare RW-lock vs plain mutex throughput.
+Following [skip_list.h](../../../minikv/src/core/skip_list.h), implement an RW-locked SkipList with `shared_mutex`. Benchmark: 10 threads each Put 100k keys + 10 threads each Get 100k keys; compare RW-lock vs plain mutex throughput.
 
 ### Exercise 4.3 (SkipList Iterator)
 

@@ -1,6 +1,6 @@
 # Module 07 — LSM-Tree 存储引擎
 
-> 对应源码：[db_impl.cpp](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.cpp)、[wal.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/wal.h)、[sstable_builder.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/sstable_builder.h)、[memtable.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/memtable.h)
+> 对应源码：[db_impl.cpp](../../../minikv/src/core/db_impl.cpp)、[wal.h](../../../minikv/src/core/wal.h)、[sstable_builder.h](../../../minikv/src/core/sstable_builder.h)、[memtable.h](../../../minikv/src/core/memtable.h)
 
 ## 背景与动机
 
@@ -88,7 +88,7 @@ flowchart LR
 
 ### 2.2 写路径详解
 
-[db_impl.cpp:88-116](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.cpp) 的 `write`：
+[db_impl.cpp:88-116](../../../minikv/src/core/db_impl.cpp) 的 `write`：
 
 ```cpp
 Status DBImpl::write(const WriteOptions& opts, const WriteBatch& batch) {
@@ -118,7 +118,7 @@ Status DBImpl::write(const WriteOptions& opts, const WriteBatch& batch) {
 
 ### 2.3 WAL 机制
 
-[wal.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/wal.h) 接口：
+[wal.h](../../../minikv/src/core/wal.h) 接口：
 
 ```cpp
 class WAL {
@@ -133,7 +133,7 @@ public:
 
 **WAL 原则**：修改数据页前，先把修改记录追加到 WAL 并落盘。崩溃后重启重放 WAL 重建内存状态。
 
-minikv 的 `recover()`（[db_impl.cpp:45-74](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.cpp)）：
+minikv 的 `recover()`（[db_impl.cpp:45-74](../../../minikv/src/core/db_impl.cpp)）：
 
 1. 打开 Manifest，恢复 Version（哪些 SSTable 存在）。
 2. `wal_->replay()` 读全部 WAL 记录。
@@ -143,7 +143,7 @@ minikv 的 `recover()`（[db_impl.cpp:45-74](file:///c:/Users/Administrator/Desk
 
 ### 2.4 SSTable 文件格式
 
-[sstable_builder.h:14-41](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/sstable_builder.h) 注释详尽：
+[sstable_builder.h:14-41](../../../minikv/src/core/sstable_builder.h) 注释详尽：
 
 ```
 /-----------------------------\
@@ -173,7 +173,7 @@ Footer (48 字节):
 
 ### 2.5 MemTable flush 流程
 
-`maybeFlush` → `flushMemTable`（见 [db_impl.h:34](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.h)）：
+`maybeFlush` → `flushMemTable`（见 [db_impl.h:34](../../../minikv/src/core/db_impl.h)）：
 
 1. 当前 MemTable 转为 Immutable MemTable（只读）。
 2. 新建空 MemTable 接收后续写。
@@ -185,7 +185,7 @@ L0 SSTable 间 key **可能重叠**（多次 flush），L1+ 层内不重叠（Co
 
 ### 2.6 读路径详解
 
-[db_impl.cpp:118-120](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.cpp)：
+[db_impl.cpp:118-120](../../../minikv/src/core/db_impl.cpp)：
 
 ```cpp
 Status DBImpl::get(const ReadOptions& opts, const Slice& key, std::string* value) {
@@ -211,7 +211,7 @@ Status DBImpl::get(const ReadOptions& opts, const Slice& key, std::string* value
 
 ### 2.7 块压缩
 
-WP 1.2.1 引入 Snappy/Zstd 压缩（见 [compression.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/compression.h)）。data block 落盘前压缩，读取时解压。块头存 `physical_size`（磁盘大小）和 `uncompressed_size`（解压后大小），CRC 校验压缩后数据。
+WP 1.2.1 引入 Snappy/Zstd 压缩（见 [compression.h](../../../minikv/src/core/compression.h)）。data block 落盘前压缩，读取时解压。块头存 `physical_size`（磁盘大小）和 `uncompressed_size`（解压后大小），CRC 校验压缩后数据。
 
 压缩权衡：省磁盘空间 + IO，但增加 CPU。Snappy 快但压缩率低，Zstd 慢但压缩率高。LSM 通常 data block 用 Snappy（热路径），冷层用 Zstd。
 
@@ -231,11 +231,11 @@ WP 1.2.1 引入 Snappy/Zstd 压缩（见 [compression.h](file:///c:/Users/Admini
 
 ### 题 4.2（SSTable 格式实验）
 
-参考 [sstable_builder.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/sstable_builder.h)，手写一个最小 SSTable：写入 3 个 KV，手动解析 footer → index → data block，验证能读回。用 hexdump 观察字节布局。
+参考 [sstable_builder.h](../../../minikv/src/core/sstable_builder.h)，手写一个最小 SSTable：写入 3 个 KV，手动解析 footer → index → data block，验证能读回。用 hexdump 观察字节布局。
 
 ### 题 4.3（读路径优化：Block Cache）
 
-为 minikv 实现一个 LRU Block Cache（参考 [lru_cache.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/lru_cache.h)）：缓存最近读过的 data block（key = file_path + block_offset），命中则跳过磁盘读。基准测试：随机 Get 100 万 key（热点 20%），对比有/无 cache 的 QPS。
+为 minikv 实现一个 LRU Block Cache（参考 [lru_cache.h](../../../minikv/src/utils/lru_cache.h)）：缓存最近读过的 data block（key = file_path + block_offset），命中则跳过磁盘读。基准测试：随机 Get 100 万 key（热点 20%），对比有/无 cache 的 QPS。
 
 ### 题 4.4（写放大测量）
 

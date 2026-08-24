@@ -1,6 +1,6 @@
 # Module 03 — 现代 C++ 与并发
 
-> 对应源码：[skip_list.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h)、[thread_pool.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/thread_pool.h)、[lru_cache.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/lru_cache.h)、[db_impl.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.h)
+> 对应源码：[skip_list.h](../../../minikv/src/core/skip_list.h)、[thread_pool.h](../../../minikv/src/utils/thread_pool.h)、[lru_cache.h](../../../minikv/src/utils/lru_cache.h)、[db_impl.h](../../../minikv/src/core/db_impl.h)
 
 ## 背景与动机
 
@@ -24,7 +24,7 @@
 
 ### 2.1 智能指针
 
-[db_impl.h:39-42](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.h) 用 `std::unique_ptr` 管理 WAL/Manifest/MemTable：
+[db_impl.h:39-42](../../../minikv/src/core/db_impl.h) 用 `std::unique_ptr` 管理 WAL/Manifest/MemTable：
 
 ```cpp
 std::unique_ptr<WAL>      wal_;
@@ -63,7 +63,7 @@ graph TB
 
 ### 2.2 移动语义
 
-[thread_pool.h:22-26](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/thread_pool.h) 提交任务时移动：
+[thread_pool.h:22-26](../../../minikv/src/utils/thread_pool.h) 提交任务时移动：
 
 ```cpp
 void submit(std::function<void()> task) {
@@ -83,7 +83,7 @@ void submit(std::function<void()> task) {
 
 ### 2.3 Lambda
 
-[thread_pool.h:17](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/thread_pool.h) 用 lambda 启动 worker：
+[thread_pool.h:17](../../../minikv/src/utils/thread_pool.h) 用 lambda 启动 worker：
 
 ```cpp
 workers_.emplace_back([this] { workerLoop(); });
@@ -95,13 +95,13 @@ workers_.emplace_back([this] { workerLoop(); });
 
 ### 2.4 `constexpr` 编译期求值
 
-`constexpr` 标注的函数/变量可在编译期求值，结果内联到代码，零运行期开销。minikv 中 [skip_list.h:25](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h) 用 `static constexpr int kMaxLevel = 32;` 定义编译期常量。
+`constexpr` 标注的函数/变量可在编译期求值，结果内联到代码，零运行期开销。minikv 中 [skip_list.h:25](../../../minikv/src/core/skip_list.h) 用 `static constexpr int kMaxLevel = 32;` 定义编译期常量。
 
 C++20 新增 `consteval`（强制编译期求值，不允许运行期调用）与 `constinit`（强制编译期初始化，防止静态初始化顺序问题）。
 
 ### 2.5 读写锁 `shared_mutex`
 
-[skip_list.h:39-40](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h) 的 `put` 用写锁：
+[skip_list.h:39-40](../../../minikv/src/core/skip_list.h) 的 `put` 用写锁：
 
 ```cpp
 void put(const std::string& key, const std::string& value) {
@@ -110,7 +110,7 @@ void put(const std::string& key, const std::string& value) {
 }
 ```
 
-而 `get` 用读锁（见 [skip_list.h:68-69](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h)）：
+而 `get` 用读锁（见 [skip_list.h:68-69](../../../minikv/src/core/skip_list.h)）：
 
 ```cpp
 std::optional<std::string> get(const std::string& key) const {
@@ -125,7 +125,7 @@ std::optional<std::string> get(const std::string& key) const {
 
 ### 2.6 `atomic` 与内存序
 
-[thread_pool.h:57](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/thread_pool.h) 用 `std::atomic<bool> running_`：
+[thread_pool.h:57](../../../minikv/src/utils/thread_pool.h) 用 `std::atomic<bool> running_`：
 
 ```cpp
 std::atomic<bool> running_;   // stop() 设 false，worker 轮询
@@ -142,7 +142,7 @@ std::atomic<bool> running_;   // stop() 设 false，worker 轮询
 
 ### 2.7 `condition_variable` 与虚假唤醒
 
-[thread_pool.h:43-48](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/thread_pool.h) 是经典生产者-消费者：
+[thread_pool.h:43-48](../../../minikv/src/utils/thread_pool.h) 是经典生产者-消费者：
 
 ```cpp
 std::unique_lock<std::mutex> lock(mutex_);
@@ -159,7 +159,7 @@ tasks_.pop();
 
 ### 2.8 `mutable` 与 const 成员
 
-[lru_cache.h:56](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/lru_cache.h) 的 `mutex_` 声明为 `mutable`：
+[lru_cache.h:56](../../../minikv/src/utils/lru_cache.h) 的 `mutex_` 声明为 `mutable`：
 
 ```cpp
 private:
@@ -263,9 +263,9 @@ auto make_status(Args&&... args) {
 
 ### 题 4.1（手撕读写锁版 SkipList，LeetCode 1206 进阶）
 
-参考 [skip_list.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/skip_list.h)，实现一个线程安全跳表：`put` 用写锁，`get`/`entries` 用读锁。用 10 个线程各插入 10000 个 key 验证无竞争。
+参考 [skip_list.h](../../../minikv/src/core/skip_list.h)，实现一个线程安全跳表：`put` 用写锁，`get`/`entries` 用读锁。用 10 个线程各插入 10000 个 key 验证无竞争。
 
-### 题 4.2（线程池扩展，对应 [thread_pool.h](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/utils/thread_pool.h)）
+### 题 4.2（线程池扩展，对应 [thread_pool.h](../../../minikv/src/utils/thread_pool.h)）
 
 在现有 `ThreadPool` 基础上添加：
 

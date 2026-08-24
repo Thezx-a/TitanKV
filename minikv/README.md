@@ -1,7 +1,7 @@
 ﻿<p align="center">
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C?style=for-the-badge&logo=cplusplus&logoColor=white" alt="C++17"/>
   <img src="https://img.shields.io/badge/Build-CMake-064F8C?style=for-the-badge&logo=cmake&logoColor=white" alt="CMake"/>
-  <img src="https://img.shields.io/badge/Tests-22%20passing-brightgreen?style=for-the-badge" alt="Tests"/>
+  <img src="https://img.shields.io/badge/Tests-17%20suites-brightgreen?style=for-the-badge" alt="Tests"/>
   <img src="https://img.shields.io/badge/License-MIT-blue?style=for-the-badge" alt="MIT"/>
 </p>
 
@@ -16,7 +16,7 @@
 
 ## Overview
 
-MiniKV is a **from-scratch implementation** of the core architecture behind LevelDB and RocksDB — the LSM-Tree (Log-Structured Merge-Tree). It's designed as a drop-in storage engine for applications needing fast writes with ordered key lookups.
+MiniKV is a **from-scratch implementation** of the core architecture behind LevelDB and RocksDB — the LSM-Tree (Log-Structured Merge-Tree). Latest engine details: MemTable held by `shared_ptr` (Get/Iterator after lock snapshot), BlockCache for decompressed SST blocks, and a master/sub Reactor TCP server (epoll LT).
 
 ### Write Path
 
@@ -112,6 +112,7 @@ graph TB
 | **SSTable** | Sorted String Table. Immutable on-disk sorted files. |
 | **Bloom Filter** | Probabilistic structure: "definitely not in this SSTable" |
 | **Compaction** | Merges SSTables to reclaim space and reduce read levels. |
+| **BlockCache** | LRU of decompressed SST data blocks (`block_cache.h`). |
 | **Skip List** | Probabilistic sorted structure used as MemTable backend. |
 
 ---
@@ -176,9 +177,10 @@ MiniKV/
 │       ├── coding.h         Varint encoding
 │       ├── crc32.h          Checksums
 │       ├── hash.h           Hash functions
-│       ├── lru_cache.h      LRU block cache
+│       ├── block_cache.h    SST decompressed block LRU (engine)
+│       ├── lru_cache.h      Generic LRU template (utils)
 │       └── thread_pool.h    Async compaction
-├── tests/                   22 unit tests
+├── tests/                   GoogleTest suites (see CMakeLists)
 ├── benches/                 Benchmarks
 ├── client/                  Python asyncio client
 ├── docker/                  Docker deployment

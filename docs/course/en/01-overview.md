@@ -1,6 +1,6 @@
 # Module 01 — Environment Setup & Project Overview
 
-> Source: top-level [CMakeLists.txt](file:///c:/Users/Administrator/Desktop/hellocpp/CMakeLists.txt), [Makefile](file:///c:/Users/Administrator/Desktop/hellocpp/Makefile), [README.md](file:///c:/Users/Administrator/Desktop/hellocpp/README.md), [docs/REFACTORING.md](file:///c:/Users/Administrator/Desktop/hellocpp/docs/REFACTORING.md)
+> Source: top-level [CMakeLists.txt](../../../CMakeLists.txt), [Makefile](../../../Makefile), [README.md](../../../README.md), [docs/REFACTORING.md](../../../docs/REFACTORING.md)
 
 ## Background & Motivation
 
@@ -58,7 +58,7 @@ Key insight: **the storage engine and network layer are written from scratch** (
 
 ### 2.2 Build System Breakdown
 
-The top-level [CMakeLists.txt](file:///c:/Users/Administrator/Desktop/hellocpp/CMakeLists.txt) sets `CMAKE_CXX_STANDARD 17` and aggregates `minikv` via `add_subdirectory`:
+The top-level [CMakeLists.txt](../../../CMakeLists.txt) sets `CMAKE_CXX_STANDARD 17` and aggregates `minikv` via `add_subdirectory`:
 
 ```cmake
 set(CMAKE_CXX_STANDARD 17)
@@ -68,7 +68,7 @@ option(ENABLE_SANITIZERS "Enable Address/Thread sanitizers" OFF)
 add_subdirectory(minikv)
 ```
 
-`minikv/CMakeLists.txt` compiles the core into a static library `minikv` and pulls Snappy + Zstd via `FetchContent` for block compression (see [cmake/FetchCompression.cmake](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/cmake/FetchCompression.cmake)).
+`minikv/CMakeLists.txt` compiles the core into a static library `minikv` and pulls Snappy + Zstd via `FetchContent` for block compression (see [cmake/FetchCompression.cmake](../../../minikv/cmake/FetchCompression.cmake)).
 
 `skynet` requires C++20 coroutine support and builds standalone (the top-level CMake does not force C++20, so minikv is not affected):
 
@@ -79,7 +79,7 @@ cmake --build skynet/build -j
 
 ### 2.3 Unified Makefile Entry
 
-The [Makefile](file:///c:/Users/Administrator/Desktop/hellocpp/Makefile) provides a cross-language unified entry. Key targets:
+The [Makefile](../../../Makefile) provides a cross-language unified entry. Key targets:
 
 | Target | Purpose |
 |---|---|
@@ -93,7 +93,7 @@ The [Makefile](file:///c:/Users/Administrator/Desktop/hellocpp/Makefile) provide
 
 ### 2.4 Local Dev Stack
 
-[deploy/dev/docker-compose.yml](file:///c:/Users/Administrator/Desktop/hellocpp/deploy/dev/docker-compose.yml) brings up local dependencies:
+[deploy/dev/docker-compose.yml](../../../deploy/dev/docker-compose.yml) brings up local dependencies:
 
 - **PostgreSQL** — metadata store (Collection, User, APIKey)
 - **Redis** — rate limiting, cache, distributed locks
@@ -133,11 +133,11 @@ Record: compiler version, number of passing tests, whether AddressSanitizer repo
 
 ### Exercise 4.2 (Architecture Mapping)
 
-Read the Repository Layout in [README.md](file:///c:/Users/Administrator/Desktop/hellocpp/README.md) and [docs/REFACTORING.md](file:///c:/Users/Administrator/Desktop/hellocpp/docs/REFACTORING.md). Summarize in a table: which Phase each directory belongs to, its current status, and its responsibility.
+Read the Repository Layout in [README.md](../../../README.md) and [docs/REFACTORING.md](../../../docs/REFACTORING.md). Summarize in a table: which Phase each directory belongs to, its current status, and its responsibility.
 
 ### Exercise 4.3 (Write Path Tracing)
 
-Read `put()` and `flushMemTable()` in [minikv/src/core/db_impl.cpp](file:///c:/Users/Administrator/Desktop/hellocpp/minikv/src/core/db_impl.cpp). Draw the complete call chain (function-level) from `Put(key,value)` all the way to a flushed SSTable on disk.
+Read `put()` and `flushMemTable()` in [minikv/src/core/db_impl.cpp](../../../minikv/src/core/db_impl.cpp). Draw the complete call chain (function-level) from `Put(key,value)` all the way to a flushed SSTable on disk.
 
 ## 5. Self-Check
 
@@ -168,3 +168,9 @@ Thinking question key points:
 ---
 
 ← [Syllabus](./README.md)  |  Next: [Module 02 — C++ Core Syntax](./02-cpp-core.md) →
+
+## Latest increments
+
+- `make run-all` includes **RAG :8085**; skynet front uses **epoll ET + C++20 coroutines**.
+- minikv: MemTable `shared_ptr` lock-free reads after snapshot, SST **BlockCache**, master/sub Reactor (LT).
+- `distributed/` + `cmd/raft` are teaching Raft experiments. See [`docs/RAG-ARCHITECTURE.md`](../../RAG-ARCHITECTURE.md) and root README.
