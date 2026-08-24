@@ -325,6 +325,618 @@ uint64_t packed = (seq &lt;&lt; kTypeBits) | type;
       </div>
     </div>
 
+    <section class="analysis" id="analysis">
+      <h2>设计深度分析</h2>
+      <p class="lead">
+        下面把 LSM-Tree 引擎的设计决策拆成三类来看：<strong>崩溃恢复</strong>（不同崩溃点 + 恢复语义）、
+        <strong>核心数据结构选型</strong>（跳表 vs 红黑树 / B+ 树）、<strong>整体取舍与优化路径</strong>。
+        每一项都给「为什么这样选 → 好处 → 缺点 → 优化方向」四段式展开。
+      </p>
+
+      <h3>1. 崩溃恢复 · 七种场景</h3>
+      <p>
+        LSM-Tree 的崩溃恢复依赖一个核心不变量：<em>WAL 持久化成功的写入，恢复后必须可见；WAL 未 fsync 的写入，允许丢失但不允许半截。</em>
+        写路径上有 <strong>崩溃点 A</strong>（WAL fsync 前）、<strong>崩溃点 B</strong>（SSTable 写一半），
+        加上 MemTable 冻结 / Compaction 提交 / Manifest 落盘 / 启动恢复 等阶段，组合出七种典型崩溃场景：
+      </p>
+
+      <div class="scenario-grid">
+
+        <div class="scenario danger">
+          <div class="shead"><span class="snum">CASE 1</span><span class="stitle">崩溃点 A · WAL fsync 未完成</span></div>
+          <p class="sbody">
+            leader 把整组写入追到 <code>wal-&lt;N&gt;.log</code> 但 <code>fsync()</code> 还没返回时进程崩溃。
+            OS page cache 中可能有部分数据，磁盘上<strong>要么全有要么全无</strong>。
+          </p>
+          <p class="sbody">
+            <strong>为什么这么设计：</strong>Group Commit 用「批量 + 单次 fsync」摊销开销，必须接受 fsync 前崩溃的窗口期。语义是 <em>all-or-nothing per group</em>。
+          </p>
+          <span class="sresult ok">恢复语义：丢弃整组 · 数据一致</span>
+        </div>
+
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">CASE 2</span><span class="stitle">崩溃点 A 后 · WAL fsync 完成但 MemTable 未写</span></div>
+          <p class="sbody">
+            fsync 返回了，但还没来得及写 MemTable 跳表就崩溃。
+            <strong>恢复：</strong><code>recover()</code> 会 <code>replayWalFile()</code> 把这条记录重新写回 MemTable——这正是 WAL 的本职工作。
+          </p>
+          <p class="sbody">
+            <strong>好处：</strong>写路径无需在 MemTable 写完后再落第二份磁盘记录，<em>WAL = 唯一真相源</em>。
+          </p>
+          <span class="sresult ok">恢复语义：WAL 回放 · 无丢失</span>
+        </div>
+
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">CASE 3</span><span class="stitle">崩溃点 B · SSTable 写一半</span></div>
+          <p class="sbody">
+            flush 线程正在构建 <code>sst-&lt;N&gt;.sst</code>，写完 data block 但 footer 还没落，进程崩。
+            文件存在但 <strong>footer magic 不符</strong> 或 <code>index_offset</code> 越界。
+          </p>
+          <p class="sbody">
+            <strong>为什么这么设计：</strong>SSTable 用 48 字节 footer + magic = <code>0x4D4B53535441424C</code>（"MKSSTABLE"）做完整性闸门。打开时校验失败即丢弃。
+            <strong>缺点：</strong>半成品文件占用磁盘，需 <code>purgeOrphanSSTables()</code> 在启动时清理孤儿。
+          </p>
+          <span class="sresult ok">恢复语义：丢弃半成品 · WAL 仍在 → 回放重建</span>
+        </div>
+
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">CASE 4</span><span class="stitle">MemTable 冻结后 · WAL 未 unlink</span></div>
+          <p class="sbody">
+            MemTable swap 进 <code>immutable_list_</code>，新 WAL 已切换，但旧 WAL 还没被 <code>flushOne()</code> 删掉就崩溃。
+          </p>
+          <p class="sbody">
+            <strong>恢复策略：</strong>启动时 <code>listWalFiles()</code> 会枚举所有 <code>wal-*.log</code>，<em>按 file_number 顺序回放</em>。
+            旧 WAL 的内容会重建出 immutable MemTable，flush 线程继续刷盘。新 WAL 的内容重建当前 memtable_。
+            <strong>好处：</strong>WAL 是线性有序的，恢复逻辑简单。
+          </p>
+          <span class="sresult ok">恢复语义：全量回放 · 无丢失</span>
+        </div>
+
+        <div class="scenario danger">
+          <div class="shead"><span class="snum">CASE 5</span><span class="stitle">Compaction 提交前崩溃</span></div>
+          <p class="sbody">
+            Compaction 已经把 src 层文件读到内存、排好序、新 SST 写完了，但 <code>version_-&gt;addLevelFile + removeLevelFiles + unlink</code> 还没原子提交。
+          </p>
+          <p class="sbody">
+            <strong>为什么这么设计：</strong>Manifest 是 <em>编辑日志</em>，add/remove 先写 Manifest 再改 Version 内存结构。恢复时 <strong>新 SST 在磁盘上但不在 Version 中</strong>，下次启动会被 <code>purgeOrphanSSTables()</code> 当孤儿清理。
+            <strong>缺点：</strong>浪费一次 Compaction 的 IO；<strong>优化：</strong>RocksDB 用 <code>Current</code> 指针原子切换 MANIFEST 快照，MiniKV 暂未实现。
+          </p>
+          <span class="sresult bad">恢复语义：Compaction 作废 · 浪费 IO · 一致</span>
+        </div>
+
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">CASE 6</span><span class="stitle">Compaction unlink 旧文件后 · Manifest 未落</span></div>
+          <p class="sbody">
+            旧 SST 已 <code>unlink</code>，但 Manifest 还没追加 remove 记录就崩溃。重启后 Version 仍认为旧文件存在，读取会 open 失败。
+          </p>
+          <p class="sbody">
+            <strong>当前实现：</strong>MiniKV 在 <code>flushOne / Compaction</code> 中先写 Manifest 再 unlink，避免这个窗口；但顺序仍是<strong>两个独立 syscall</strong>，理论上仍有 Manifest 写一半的风险。
+            <strong>优化方向：</strong>Manifest 也用「append + fsync + checkpoint」语义，并加 <code>MANIFEST-&lt;N&gt;</code> 文件号轮转。
+          </p>
+          <span class="sresult bad">恢复语义：理论上存在 · 实际顺序规避</span>
+        </div>
+
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">CASE 7</span><span class="stitle">启动恢复中途崩溃</span></div>
+          <p class="sbody">
+            <code>recover()</code> 过程本身崩溃（如 replayWalFile 走到一半）。因为 <em>WAL 是只追加</em>，回放是幂等的（每个 entry 带 seq），二次启动可继续回放，不会重复写。
+          </p>
+          <p class="sbody">
+            <strong>好处：</strong>恢复是 <em>幂等</em> 的，无需 checkpoint 即可多次重试。
+            <strong>缺点：</strong>大 WAL 回放慢；<strong>优化：</strong>RocksDB 在恢复到一定量后写一次 <code>checkpoint</code>，下次直接挂载。
+          </p>
+          <span class="sresult ok">恢复语义：幂等重放 · 最终一致</span>
+        </div>
+
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">为什么 LSM-Tree 的崩溃恢复比 B+ 树简单？</span>
+        B+ 树原地更新，崩溃后页面可能半新半旧，需要影子页 + WAL + 检查点三重保护才能保证一致。
+        LSM-Tree <em>只追加</em>（WAL + SSTable 都不可变），崩溃点天然收敛到「正在写的那个文件」，
+        用 footer magic / WAL seq / Manifest 编辑日志三个闸门就能保证一致性。
+        <strong>代价</strong>是写放大与空间放大——但崩溃恢复的工程复杂度降了一个量级。
+      </div>
+
+      <h3>2. 核心数据结构 · 为什么用跳表不用红黑树</h3>
+      <p>
+        MemTable 是引擎最热的内存结构：写要 O(log n) 有序插入，读要 O(log n) 查找，flush 要有序遍历，并发读多写少。
+        候选有 <strong>跳表 SkipList</strong> / <strong>红黑树 RBTree</strong> / <strong>B+ 树</strong>。下面对比并解释选型：
+      </p>
+
+      <table class="compare">
+        <thead>
+          <tr>
+            <th>维度</th>
+            <th>跳表 SkipList</th>
+            <th>红黑树 RBTree</th>
+            <th>B+ 树（内存版）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>时间复杂度</strong></td>
+            <td>期望 O(log n)（概率平衡）</td>
+            <td>最坏 O(log n)（强制平衡）</td>
+            <td>O(log n)（节点扇出大，常数更小）</td>
+          </tr>
+          <tr>
+            <td><strong>实现复杂度</strong></td>
+            <td class="win">~200 行，无旋转</td>
+            <td>~500 行，左右旋转 + 颜色翻转</td>
+            <td>~800 行，节点分裂合并</td>
+          </tr>
+          <tr>
+            <td><strong>并发友好度</strong></td>
+            <td class="win">无锁迭代（forward 指针只往后加）</td>
+            <td>旋转改 3 个节点，需全局写锁</td>
+            <td>分裂改父子两节点，需路径锁</td>
+          </tr>
+          <tr>
+            <td><strong>范围扫描</strong></td>
+            <td class="win">最底层链表，O(n) 顺序遍历</td>
+            <td>中序遍历，需栈或父指针</td>
+            <td class="win">叶子链表，原生支持</td>
+          </tr>
+          <tr>
+            <td><strong>缓存局部性</strong></td>
+            <td>节点分散，常数略大</td>
+            <td>节点分散，常数略大</td>
+            <td class="win">节点大，cache-friendly</td>
+          </tr>
+          <tr>
+            <td><strong>内存开销</strong></td>
+            <td>每节点 forward[level] 指针（期望 1.5 个）</td>
+            <td>每节点 2 子 + 1 色 = 3 字</td>
+            <td>每节点 N 子 + 父 = 大</td>
+          </tr>
+          <tr>
+            <td><strong>实现易错度</strong></td>
+            <td class="win">低 · 概率平衡无需维护</td>
+            <td>高 · 删除尤其复杂</td>
+            <td>中 · 分裂/合并边界</td>
+          </tr>
+          <tr>
+            <td><strong>行业先例</strong></td>
+            <td class="win">LevelDB / RocksDB / Redis ZSET</td>
+            <td>STL map / Linux CFS</td>
+            <td>InnoDB / WiredTiger</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="procon">
+        <div class="pros">
+          <h4>选 SkipList 的好处 <span class="badge">Pros</span></h4>
+          <ul>
+            <li><strong>实现简单：</strong>无旋转无重平衡，<code>insert/find</code> 逻辑线性，<code>randomLevel()</code> 是唯一随机源。</li>
+            <li><strong>并发友好：</strong>forward 指针只向后追加，旧节点不会被改；可以做到「写时复制节点 + 原子 CAS forward」的无锁读，本实现用 shared_mutex 已足够。</li>
+            <li><strong>概率平衡：</strong>不需要维护红黑性质，<code>kMaxLevel=32</code> + 0.5 提升概率，期望层高 ≈ 1.5，与理论一致。</li>
+            <li><strong>范围扫描天然友好：</strong>flush 时 <code>MemTableIterator</code> 直接走最底层链表，O(n) 一遍扫完，与 SSTable 合并的归并迭代器无缝衔接。</li>
+            <li><strong>与 LSM 语义契合：</strong>MemTable 是短命数据结构（刷盘即销毁），不需要 B+ 树那种持久化优化；跳表的简单性红利最大。</li>
+            <li><strong>行业背书：</strong>LevelDB/RocksDB 用跳表，社区资料多，面试认知成本最低。</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>选 SkipList 的代价 <span class="badge">Cons</span></h4>
+          <ul>
+            <li><strong>最坏复杂度：</strong>概率平衡，理论上最坏 O(n)。实践中 kMaxLevel=32 + 随机源质量好时几乎不可能。</li>
+            <li><strong>缓存局部性差：</strong>节点 forward 是分散指针，相比 B+ 树的大节点 cache miss 多。MemTable 体量小时不显著，大时影响读 p99。</li>
+            <li><strong>内存碎片：</strong>每个 SkipNode 独立 new，分配器压力大；RocksDB 用 arena 一次性分配大块 + offset 索引解决。</li>
+            <li><strong>并发读仍需锁：</strong>本实现用 <code>std::shared_mutex</code>，写多时读会被阻塞；RocksDB 用更细粒度的原子读实现 lock-free read。</li>
+            <li><strong>不持久化：</strong>跳表只在内存，崩了靠 WAL 重建；不像 B+ 树本身就在盘上。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">为什么不选 B+ 树做 MemTable？</span>
+        B+ 树的优势是「持久化 + 缓存友好 + 范围扫描」，但这些优势在 MemTable 场景<strong>用不上</strong>：
+        MemTable 是短命的（刷盘就销毁）、体量小（4MB）、不需要在磁盘上。B+ 树的分裂合并复杂度反而拖累。
+        真正用 B+ 树的地方是 <em>SSTable 的块内索引</em>——那是磁盘上的，需要缓存友好。
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">优化路径 · 让跳表更猛</span>
+        (1) <strong>Arena 分配：</strong>用一块大内存 + offset，避免每节点 new，缓存局部性 +30%。<br>
+        (2) <strong>无锁读 + 单写者：</strong>forward 用 atomic，读不加锁，写串行化（RocksDB InlineSkipList）。<br>
+        (3) <strong>prefix bloom + hash index：</strong>对带前缀的 key 加一层哈希索引，跳过部分跳表查找。<br>
+        (4) <strong>Pin 边界 key：</strong>flush 时记录 [min, max]，外部用 key 范围直接跳过整个 MemTable。
+      </div>
+
+      <h3>3. WAL · Group Commit 的取舍</h3>
+      <p>
+        WAL 每条写入都 <code>fsync</code> 太慢（HDD ≈ 1ms / NVMe ≈ 50μs），完全不 fsync 又不安全。
+        Group Commit 是「折中点」：<code>kMaxGroupSize=32</code> 或 <code>500μs</code> 超时，leader 一次性 fsync 整组。
+      </p>
+
+      <div class="procon">
+        <div class="pros">
+          <h4>Group Commit 的好处 <span class="badge">Pros</span></h4>
+          <ul>
+            <li><strong>摊销 fsync：</strong>32 条写入共享一次 fsync，单条 WAL 成本下降 32 倍。</li>
+            <li><strong>吞吐与延迟的平衡：</strong>500μs 超时保证单条延迟上限；32 条批量保证吞吐。</li>
+            <li><strong>无锁唤醒：</strong>leader 写完后 <code>group_cv_.notify_all()</code>，follower 一次性唤醒。</li>
+            <li><strong>崩溃语义清晰：</strong>整组原子，要么全可见要么全不可见。</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>Group Commit 的代价 <span class="badge">Cons</span></h4>
+          <ul>
+            <li><strong>单 leader 瓶颈：</strong>同一时刻只有一个 leader 在 fsync，高并发下队列积压。</li>
+            <li><strong>延迟抖动：</strong>低并发时单条要等 500μs 超时才提交，p99 偶尔抖。</li>
+            <li><strong>恢复语义粗：</strong>无法区分组内单条，只能整组保留或丢弃。</li>
+            <li><strong>fsync 仍是 syscall：</strong>没有绕开系统调用开销。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">WAL 的进一步优化方向</span>
+        (1) <strong>Parallel Group Commit：</strong>多个 leader 并发 fsync 不同 WAL 文件，类似 MySQL binlog group commit。<br>
+        (2) <strong>Sync WAL bypass：</strong>非关键写入（如 cache 预热）用 <code>WriteOptions::disable_wal=true</code>，跳过 WAL。<br>
+        (3) <strong>Direct I/O + 用户态 AIO：</strong>绕过 page cache，用 <code>io_uring</code> 批量提交，延迟与吞吐可观测。<br>
+        (4) <strong>Segmented WAL：</strong>按 key 分片到多个 WAL，并行 fsync，提高并发上限。<br>
+        (5) <strong>Zero-copy + mmap：</strong>WAL 文件 mmap 到内存，写入即落盘（仍需 fsync 元数据）。
+      </div>
+
+      <h3>4. SSTable · 磁盘布局的取舍</h3>
+      <p>
+        SSTable 选「data block + index block + footer」三段式，块默认 4KB，footer 48 字节固定。这是个工程上反复打磨的结构。
+      </p>
+
+      <div class="procon">
+        <div class="pros">
+          <h4>三段式布局的好处 <span class="badge">Pros</span></h4>
+          <ul>
+            <li><strong>随机读不读全文件：</strong>footer 拿 index_offset → 跳到 index block → 二分定位 data block → 只读那块。</li>
+            <li><strong>块级压缩：</strong>每个 block 独立 Snappy，读时只解压目标块，内存友好。</li>
+            <li><strong>BloomFilter 前置：</strong>读 key 前先问布隆，<em>99% 不存在的查询</em>不读 data block。</li>
+            <li><strong>footer 固定大小：</strong>48 字节固定，<code>seek(-48)</code> 即可定位，无需扫描。</li>
+            <li><strong>magic 校验：</strong>打开即校验，半成品文件秒级识别并丢弃。</li>
+            <li><strong>版本兼容：</strong><code>format_version</code> 字段区分新旧 block 头，可平滑升级。</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>三段式布局的代价 <span class="badge">Cons</span></h4>
+          <ul>
+            <li><strong>读放大：</strong>一次 Get 最多读 N 层 SSTable，每层 BloomFilter + index + data 三次 IO。</li>
+            <li><strong>空间放大：</strong>多版本 + tombstone 占空间，需 Compaction 清理。</li>
+            <li><strong>写放大：</strong>Compaction 反复重写有效数据。</li>
+            <li><strong>block_size 调参难：</strong>4KB 适合 HDD，NVMe 上更优可能是 8-16KB。</li>
+            <li><strong>index block 单点：</strong>整个 SSTable 只有一个 index，并发读都加载它，cache 压力大。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">SSTable 的优化路径</span>
+        (1) <strong>Two-level index：</strong>index block 自身也分块，搞二级索引，大文件友好。<br>
+        (2) <strong>Partitioned Index/Filters：</strong>RocksDB 把 index 与 bloom 分片到 data block 旁边，按需加载，节省内存。<br>
+        (3) <strong>Prefix Bloom：</strong>对前缀查询加二级布隆，scan 优化。<br>
+        (4) <strong>Data block hash index：</strong>块内再加 hash 索引，二分变 O(1)。<br>
+        (5) <strong>ZSTD 压缩：</strong>比 Snappy 压缩率高 2-3x，CPU 代价略高。<br>
+        (6) <strong>Hash-based SSTable（Cuckoo）：</strong>对点查极端优化场景，用 cuckoo hash 替换排序结构。
+      </div>
+
+      <h3>5. Compaction · 合并策略的取舍</h3>
+      <p>
+        MiniKV 当前用 <strong>Leveled Compaction</strong>（L0 文件数触发，合并到下层）。
+        这是 RocksDB 默认策略的简化版，对比 Tiered / FIFO / Hybrid 另有取舍。
+      </p>
+
+      <table class="compare">
+        <thead>
+          <tr><th>策略</th><th>写放大</th><th>读放大</th><th>空间放大</th><th>适用场景</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Leveled</strong>（本实现）</td>
+            <td class="lose">高（每层反复重写）</td>
+            <td class="win">低（每层最多一个文件）</td>
+            <td class="win">低（最新版本）</td>
+            <td>读多写少</td>
+          </tr>
+          <tr>
+            <td>Tiered</td>
+            <td class="win">低（每层一次合并）</td>
+            <td class="lose">高（每层多文件）</td>
+            <td class="lose">高（多版本并存）</td>
+            <td>写多读少</td>
+          </tr>
+          <tr>
+            <td>FIFO</td>
+            <td class="win">最低</td>
+            <td>中</td>
+            <td class="lose">高</td>
+            <td>时序数据 / TTL</td>
+          </tr>
+          <tr>
+            <td>Hybrid（RocksDB Universal）</td>
+            <td>中</td><td>中</td><td>中</td>
+            <td>通用，调参难</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="procon">
+        <div class="pros">
+          <h4>当前 Leveled 的好处 <span class="badge">Pros</span></h4>
+          <ul>
+            <li><strong>读放大可控：</strong>每层至多一个有序文件，查询最多 N 次 IO。</li>
+            <li><strong>空间放大低：</strong>同层无重复 key，旧版本及时清理。</li>
+            <li><strong>实现直观：</strong><code>mergeLevelFiles</code> 一遍 sort + 重建，逻辑清晰。</li>
+            <li><strong>语义干净：</strong>tombstone 在合并到最后一层时安全清除。</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>当前 Leveled 的代价 <span class="badge">Cons</span></h4>
+          <ul>
+            <li><strong>写放大严重：</strong>同一 key 可能被合并 10x+ 次，SSD 寿命杀手。</li>
+            <li><strong>L0 是瓶颈：</strong>L0 文件间范围重叠，查询要遍历所有 L0。</li>
+            <li><strong>Compaction 风暴：</strong>大合并时 IO 打满，影响在线请求延迟。</li>
+            <li><strong>单线程合并：</strong>本实现未做多线程并行 merge，大合并慢。</li>
+            <li><strong>触发条件简单：</strong>只看 L0 文件数，没考虑 level 总大小。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">Compaction 的优化路径</span>
+        (1) <strong>Subcompaction：</strong>把一个合并任务按 key range 切片到多线程，RocksDB 默认开启。<br>
+        (2) <strong>Rate Limiter：</strong>限制 Compaction IO 带宽（<code>rate_bytes_per_sec</code>），避免打满在线请求。<br>
+        (3) <strong>Tiered-then-Leveled：</strong>低层 Tiered（写优化）+ 高层 Leveled（读优化），两全。<br>
+        (4) <strong>L0 → L1 Ingest：</strong>L0 文件本就有序，可直接 ingest 到 L1 当作首个文件，避免重复合并。<br>
+        (5) <strong>Lazy Compaction：</strong>只在读放大超阈值时合并，避免无谓 IO。<br>
+        (6) <strong>Snapshot-aware：</strong>跳过被旧 snapshot 引用的 key，避免 GC 卡住。
+      </div>
+
+      <h3>6. BloomFilter · 双哈希与误判率</h3>
+      <p>
+        BloomFilter 用 <code>murmurHash2(key, 0xbc9f1d34)</code> + <code>murmurHash2(key, 0x9e3779b9)</code> 双哈希，
+        <code>pos = (h1 + i*h2) % bits</code>，默认误判率 1%。
+      </p>
+
+      <div class="procon">
+        <div class="pros">
+          <h4>双哈希布隆的好处 <span class="badge">Pros</span></h4>
+          <ul>
+            <li><strong>memory 单次：</strong>只用一次 murmurHash2 计算，<em>不是 num_hashes 次独立哈希</em>。</li>
+            <li><strong>空间高效：</strong>1% 误判率下 bits_per_key ≈ 9.6 bit，10 万 key 仅 120KB。</li>
+            <li><strong>常量小：</strong>num_hashes = bits * ln(2) ≈ 7 次，CPU 友好。</li>
+            <li><strong>负结果可信：</strong>返回「不存在」一定不存在，挡掉 99% 的无效读。</li>
+            <li><strong>持久化友好：</strong>一次写入 + 一次加载，无需重建。</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>双哈希布隆的代价 <span class="badge">Cons</span></h4>
+          <ul>
+            <li><strong>假阳性：</strong>1% 概率说「可能存在」但实际不在，仍要读盘。</li>
+            <li><strong>不能删除：</strong>位图不能 reset，tombstone 后 key 仍占位。<em>无法支持删除场景。</em></li>
+            <li><strong>哈希相关性：</strong>双哈希是 <code>h1 + i*h2</code> 的 Kirsch-Mitzenmacher 方案，理论上次优但实践中够用。</li>
+            <li><strong>对短 key 不友好：</strong>哈希分布依赖 key 长度，短 key 误判率升。</li>
+            <li><strong>不可合并：</strong>多个 SSTable 的 bloom 不能合并，每文件一个。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">BloomFilter 的优化方向</span>
+        (1) <strong>Counting Bloom：</strong>用计数位代替 bit，支持删除，但内存 4x。<br>
+        (2) <strong>Ribbon Filter / XOR Filter：</strong>更省空间（10-30%），支持删除，构造慢但查询快。<br>
+        (3) <strong>SuRF / Trie filter：</strong>支持前缀查询的过滤器，范围扫描友好。<br>
+        (4) <strong>Pin hot bloom in memory：</strong>热 SSTable 的 bloom 常驻内存，冷文件按需加载。<br>
+        (5) <strong>Per-key prefix bloom：</strong>对前缀查询加二级 bloom，scan 优化。
+      </div>
+
+      <h3>7. BlockCache · LRU 的取舍</h3>
+      <p>
+        BlockCache 用 <code>utils/lru_cache.h</code>，hash map + 双向链表，<code>(path, offset) → Block*</code>。
+        Compaction 删文件时 <code>invalidatePath</code> 清理对应条目。
+      </p>
+
+      <div class="procon">
+        <div class="pros">
+          <h4>LRU + hash 的好处 <span class="badge">Pros</span></h4>
+          <ul>
+            <li><strong>O(1) 命中 / 淘汰：</strong>hash 查找 + 链表头尾操作。</li>
+            <li><strong>实现简单：</strong>~100 行模板代码，无外部依赖。</li>
+            <li><strong>命中率稳定：</strong>对最近访问友好，重复读场景效果显著。</li>
+            <li><strong>失效精确：</strong>Compaction 删文件时按 path 精确清理，不留脏数据。</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>LRU + hash 的代价 <span class="badge">Cons</span></h4>
+          <ul>
+            <li><strong>scan 灾难：</strong>一次范围扫描可冲掉大半缓存，污染严重。</li>
+            <li><strong>无优先级：</strong>meta block 与 data block 同等地位，热点索引可能被冷数据挤掉。</li>
+            <li><strong>锁粒度粗：</strong>本实现单一互斥锁，高并发读缓存时仍竞争。</li>
+            <li><strong>无分片：</strong>单一大 hash，热点 key 命中率分散差。</li>
+            <li><strong>不抗负载：</strong>突增流量下命中率骤降。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">BlockCache 的优化路径</span>
+        (1) <strong>LRU + LFU 混合（W-TinyLFU）：</strong>Caffeine 算法，scan 抗污染 + 热点保留。<br>
+        (2) <strong>分片 ShardedCache：</strong>按 key hash 分 N 片，降低锁竞争。<br>
+        (3) <strong>优先级缓存：</strong>index/filter block 与 data block 分池，meta 池小而精。<br>
+        (4) <strong>mmap 直读：</strong>对只读 SSTable 直接 mmap，绕过 BlockCache，OS page cache 即缓存。<br>
+        (5) <strong>压缩块缓存 + 解压块缓存分离：</strong>RocksDB 的 block_cache + compressed_block_cache 双池。<br>
+        (6) <strong>异步预读：</strong>扫描场景下 prefetch 下一个 block。
+      </div>
+
+      <h3>8. MVCC · InternalKey trailer 的取舍</h3>
+      <p>
+        MiniKV 用 <code>user_key(变长) + 8 字节 trailer</code> 的 InternalKey，trailer 把 seq 与 type 打包：
+        <code>packed = (seq &lt;&lt; kTypeBits) | type</code>。排序规则：<em>user_key 升序 → 相同 user_key 时 seq 降序</em>。
+      </p>
+
+      <div class="procon">
+        <div class="pros">
+          <h4>trailer 方案的好处 <span class="badge">Pros</span></h4>
+          <ul>
+            <li><strong>多版本共存：</strong>同一 user_key 的多个版本天然有序排在一起，新版本在前。</li>
+            <li><strong>无需独立索引：</strong>seq 直接编码进 key，跳表/SSTable 不需要额外结构。</li>
+            <li><strong>Snapshots 免费：</strong>读时给定 seq 即可过滤，<code>seq &gt; reader_seq</code> 的版本跳过。</li>
+            <li><strong>tombstone 也是版本：</strong>删除即写入 type=kDeletion，统一处理。</li>
+            <li><strong>比较函数简单：</strong>memcmp 字节序即可，<code>InternalKeyCompare</code> 几行搞定。</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>trailer 方案的代价 <span class="badge">Cons</span></h4>
+          <ul>
+            <li><strong>空间放大：</strong>每个版本 8 字节 trailer，多版本场景浪费。</li>
+            <li><strong>GC 延迟：</strong>旧版本只在 Compaction 时清理，长 snapshot 会拖累 GC。</li>
+            <li><strong>seq 是引擎级：</strong>不是真正的 snapshot isolation，跨事务隔离要靠上层。</li>
+            <li><strong>seq 溢出风险：</strong>seq 通常是 56 bit，理论上有溢出问题（实践中几乎不会）。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">MVCC 的优化方向</span>
+        (1) <strong>Snapshots 表：</strong>维护活跃 snapshot 列表，Compaction 时跳过被引用的旧版本。<br>
+        (2) <strong>Transactional seq：</strong>引入 per-transaction seq，支持真正的事务隔离。<br>
+        (3) <strong>seq 压缩：</strong>对旧版本批量清理，避免单条清理开销。<br>
+        (4) <strong>Hybrid Logical Clock：</strong>用 HLC 替换纯 seq，支持分布式时钟。
+      </div>
+
+      <h3>9. 整体取舍 · LSM-Tree vs B+ Tree vs Redis</h3>
+      <p>
+        最后把引擎作为一个整体，与 B+ 树（InnoDB）、Redis（dict + RDB+AOF）做横向对比：
+      </p>
+
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>MiniKV (LSM-Tree)</th><th>InnoDB (B+ Tree)</th><th>Redis (dict + AOF)</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>写性能</strong></td>
+            <td class="win">顺序写 + 内存追加，10万+/s</td>
+            <td>原地更新 + fsync，5千/s</td>
+            <td class="win">内存操作，10万+/s</td>
+          </tr>
+          <tr>
+            <td><strong>读性能</strong></td>
+            <td>多层合并，单次 1-3ms</td>
+            <td class="win">3-4 层 B+，0.1-1ms</td>
+            <td class="win">纯内存，&lt;0.1ms</td>
+          </tr>
+          <tr>
+            <td><strong>写放大</strong></td>
+            <td class="lose">10-30x</td>
+            <td>1-2x</td>
+            <td>1x（AOF）</td>
+          </tr>
+          <tr>
+            <td><strong>读放大</strong></td>
+            <td class="lose">N 层 + BloomFilter</td>
+            <td>固定 3-4 层</td>
+            <td class="win">1 次 hash</td>
+          </tr>
+          <tr>
+            <td><strong>空间放大</strong></td>
+            <td>中（多版本 + tombstone）</td>
+            <td class="win">低（原地更新）</td>
+            <td class="win">低（无多版本）</td>
+          </tr>
+          <tr>
+            <td><strong>崩溃恢复</strong></td>
+            <td class="win">WAL 回放，简单</td>
+            <td>WAL + redo + undo</td>
+            <td>RDB + AOF replay</td>
+          </tr>
+          <tr>
+            <td><strong>数据规模</strong></td>
+            <td class="win">TB-PB</td>
+            <td class="win">TB-PB</td>
+            <td>GB（内存受限）</td>
+          </tr>
+          <tr>
+            <td><strong>范围扫描</strong></td>
+            <td class="win">有序迭代器</td>
+            <td class="win">叶子链表</td>
+            <td>不支持</td>
+          </tr>
+          <tr>
+            <td><strong>并发模型</strong></td>
+            <td>MemTable 锁 + SSTable 无锁读</td>
+            <td>页锁 + MVCC</td>
+            <td>单线程 + IO 多线程</td>
+          </tr>
+          <tr>
+            <td><strong>典型场景</strong></td>
+            <td>LSM 日志 / KV / 时序</td>
+            <td>OLTP / 关系表</td>
+            <td>缓存 / 会话</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        <span class="ctitle">整体结论 · 为什么 MiniKV 选 LSM-Tree</span>
+        目标场景是 <em>结构化 KV 存储 + 写多读少 + 大数据量 + 简单崩溃恢复</em>，这与 LSM-Tree 的优势完全契合：
+        <ul style="margin-top:6px">
+          <li><strong>写优化：</strong>追加写内存 + WAL，不触盘不就地更新。</li>
+          <li><strong>恢复简单：</strong>WAL 幂等回放，无需 undo log。</li>
+          <li><strong>范围扫描：</strong>层级有序迭代器天然支持。</li>
+          <li><strong>实现可控：</strong>~3000 行 C++ 实现完整引擎，是面试项目最佳复杂度。</li>
+        </ul>
+        <strong>代价</strong>是写放大与读放大，通过 BloomFilter / BlockCache / Compaction 优化 + 后续可扩展性（Subcompaction / W-TinyLFU / Ribbon filter）逐步收敛。
+      </div>
+
+      <h3>10. 设计原则总结</h3>
+      <div class="scenario-grid">
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">原则 1</span><span class="stitle">只追加 · 不可变</span></div>
+          <p class="sbody">WAL / SSTable / Manifest 全部 append-only，崩溃点收敛到「正在写的那个文件」。</p>
+        </div>
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">原则 2</span><span class="stitle">单一真相源</span></div>
+          <p class="sbody">WAL 是写入的真相源，Version 是 SSTable 的真相源，恢复逻辑无歧义。</p>
+        </div>
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">原则 3</span><span class="stitle">幂等恢复</span></div>
+          <p class="sbody">WAL 回放、Manifest 重放都是幂等的，中断恢复可多次重试。</p>
+        </div>
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">原则 4</span><span class="stitle">分层职责</span></div>
+          <p class="sbody">MemTable 写优化，SSTable 读优化，Compaction 收敛放大，每层职责单一。</p>
+        </div>
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">原则 5</span><span class="stitle">概率平衡 &gt; 强制平衡</span></div>
+          <p class="sbody">跳表用概率平衡换取实现简单与并发友好，接受理论最坏换取工程可控。</p>
+        </div>
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">原则 6</span><span class="stitle">摊销 &gt; 单次最优</span></div>
+          <p class="sbody">Group Commit 摊销 fsync，Compaction 摊销合并，用单次延迟换整体吞吐。</p>
+        </div>
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">原则 7</span><span class="stitle">读路径前置过滤</span></div>
+          <p class="sbody">BloomFilter → index → block 三级过滤，把磁盘 IO 降到最低。</p>
+        </div>
+        <div class="scenario danger">
+          <div class="shead"><span class="snum">原则 8</span><span class="stitle">接受放大换简单</span></div>
+          <p class="sbody">写放大 10-30x 是 LSM 的硬代价，换取崩溃恢复简单 + 实现量小。</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">MiniKV 实现边界（如实告知）</span>
+        本实现是教学级 LSM-Tree，相比 RocksDB / LevelDB 仍有差距：<br>
+        (1) 无 Snapshot 列表管理，长事务会拖累 Compaction；<br>
+        (2) 无 Subcompaction，大合并单线程；<br>
+        (3) 无 Rate Limiter，Compaction 会抢占在线 IO；<br>
+        (4) BlockCache 单 LRU 无分片；<br>
+        (5) 无 Prefix Bloom / Block-based hash index；<br>
+        (6) Manifest 无 checkpoint，大库恢复慢。<br>
+        这些都是<em>工程化量产与教学版的关键差距</em>，也是本页面设计分析的优化方向所在。
+      </div>
+    </section>
+
     <h2>关键源码索引</h2>
     <ul class="file-list">
       <li><span class="fp">db_impl.h / .cpp</span><span class="fd">对外 DB 接口、Group Commit、后台 flush</span></li>

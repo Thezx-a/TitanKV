@@ -56,6 +56,10 @@
       </div>
     </div>
 
+    <figure class="layer-banner">
+      <img alt="微服务架构概念图" src="https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=Minimalist%20editorial%20illustration%20of%20a%20microservices%20architecture%20warm%20cream%20beige%20background%20deep%20navy%20blue%20five%20separate%20service%20modules%20connected%20by%20flowing%20data%20lines%20through%20a%20central%20gateway%20block%20each%20service%20with%20distinct%20geometric%20shape%20soft%20slate%20gray%20accents%20clean%20flat%20design%20elegant%20no%20text%20no%20words%20no%20letters&image_size=landscape_16_9" />
+    </figure>
+
     <h2>服务全景</h2>
     <table class="kp">
       <thead><tr><th>服务</th><th>端口</th><th>职责</th><th>关键依赖</th></tr></thead>
@@ -175,19 +179,83 @@
     </div>
 
     <h2>RAG 服务 · 检索增强生成全链路</h2>
-    <p>RAG 是本层最复杂的服务，从文档入库到流式问答一条龙。流程：<code>ingest → chunker → embedding → hnsw_index → retrieve → rerank → llm → chat(SSE)</code>。</p>
+    <p>RAG 是本层最复杂的服务，从文档入库到流式问答一条龙。下面把入库与查询两条路径竖向展开。</p>
 
-    <div class="arch-diagram">入库 (rag:ingest):
-  Document ──▶ chunker (分块) ──▶ embedding (向量化) ──▶ hnsw_index.Add() ──▶ store
+    <div class="vflow-pair">
+      <div>
+        <h4>入库 · ingest (rag:ingest)</h4>
+        <div class="vflow">
+          <div class="vstep"><div class="vnode">1</div><div class="vbody">
+            <p class="vtitle">Document 接入 <span class="vtag safe">ingest.go</span></p>
+            <p class="vdesc">接收上传文档（文本 / markdown / pdf），写入临时缓冲。</p>
+            <p class="vdetail"><strong>崩溃点 A：</strong>接入后未分块就崩 → 客户端重试；服务端无残留。</p>
+          </div></div>
+          <div class="vstep"><div class="vnode">2</div><div class="vbody">
+            <p class="vtitle">chunker · 文档分块 <span class="vtag safe">chunker.go</span></p>
+            <p class="vdesc">按字符 / 段落滑窗切分，<code>chunk_size=512, overlap=64</code>。</p>
+          </div></div>
+          <div class="vstep"><div class="vnode">3</div><div class="vbody">
+            <p class="vtitle">embedding · 向量化 <span class="vtag safe">embedding.go</span></p>
+            <p class="vdesc">每块调 embedding 模型 API，得到 <code>dim=768</code> 的向量。</p>
+            <p class="vdetail"><strong>崩溃点 B：</strong>部分块 embed 完后崩 → 已 embed 的入索引，未 embed 的需客户端重试；本实现<em>无事务回滚</em>。</p>
+          </div></div>
+          <div class="vstep"><div class="vnode">4</div><div class="vbody">
+            <p class="vtitle">hnsw_index.Add() <span class="vtag safe">hnsw_index.go</span></p>
+            <p class="vdesc">从顶层 greedyClosest 下降 → 目标层 searchLayer 选邻居 → 双向连边。</p>
+            <p class="vdetail"><strong>关键：</strong><code>m=16, ml=1/log(16)</code>，概率分层，无锁插入需 <code>sync.RWMutex</code>。</p>
+          </div></div>
+          <div class="vstep"><div class="vnode alt">5</div><div class="vbody">
+            <p class="vtitle">WriteBatch · 写 MiniKV <span class="vtag safe">store.go</span></p>
+            <p class="vdesc">向量 + chunk 文本分别以 <code>vec:&lt;id&gt;</code> / <code>chunk:&lt;id&gt;</code> key 写入 MiniKV。</p>
+            <p class="vdetail"><strong>崩溃点 C：</strong>MiniKV 写一半崩 → WAL 恢复幂等；但 HNSW 索引内存状态不持久化（重启需 SaveSnapshot 重建）。</p>
+          </div></div>
+        </div>
+      </div>
+      <div>
+        <h4>查询 · chat (rag:query)</h4>
+        <div class="vflow">
+          <div class="vstep"><div class="vnode">1</div><div class="vbody">
+            <p class="vtitle">Query 接入 <span class="vtag safe">chat.go</span></p>
+            <p class="vdesc">接收用户问题，可能含多轮对话历史。</p>
+          </div></div>
+          <div class="vstep"><div class="vnode">2</div><div class="vbody">
+            <p class="vtitle">embedding · 查询向量化 <span class="vtag safe">embedding.go</span></p>
+            <p class="vdesc">问题用相同 embedding 模型转成向量。</p>
+          </div></div>
+          <div class="vstep"><div class="vnode">3</div><div class="vbody">
+            <p class="vtitle">hnsw_index.TopK(k) <span class="vtag safe">hnsw_index.go</span></p>
+            <p class="vdesc">顶层贪心下降 → 底层 <code>searchLayerLocked(ef=k*4)</code> 取候选 → 余弦相似度排序。</p>
+            <p class="vdetail"><strong>崩溃点 D：</strong>查询中途崩 → 客户端 SSE 连接断开；服务端协程泄漏由 ctx timeout 兜底。</p>
+          </div></div>
+          <div class="vstep"><div class="vnode">4</div><div class="vbody">
+            <p class="vtitle">retrieve · 回查 chunk <span class="vtag safe">retrieve.go</span></p>
+            <p class="vdesc">根据向量 ID 回查 <code>chunk:&lt;id&gt;</code>，拿原文片段。</p>
+          </div></div>
+          <div class="vstep"><div class="vnode">5</div><div class="vbody">
+            <p class="vtitle">rerank · 重排 <span class="vtag safe">rerank.go</span></p>
+            <p class="vdesc">对 TopK 候选做二次相关性打分，提升最终精度。</p>
+          </div></div>
+          <div class="vstep"><div class="vnode">6</div><div class="vbody">
+            <p class="vtitle">llm · prompt 拼装 <span class="vtag safe">llm.go</span></p>
+            <p class="vdesc">把问题 + rerank 后的 chunk 拼成 prompt，调大模型。</p>
+            <p class="vdetail"><strong>崩溃点 E：</strong>LLM API 不可达 → 返回 502；本实现无 fallback 模型。</p>
+          </div></div>
+          <div class="vstep"><div class="vnode alt">7</div><div class="vbody">
+            <p class="vtitle">chat · SSE 流式输出 <span class="vtag safe">chat.go</span></p>
+            <p class="vdesc">把 LLM 输出按 token chunk 流式吐给前端，<code>text/event-stream</code>。</p>
+            <p class="vdetail"><strong>崩溃点 F：</strong>客户端断连 → 服务端继续生成（浪费 token）或 ctx cancel 检测断开。</p>
+          </div></div>
+        </div>
+      </div>
+    </div>
 
-查询 (rag:query):
-  Query ──▶ embedding ──▶ hnsw_index.TopK(k) ──▶ retrieve (取 chunk) ──▶ rerank
-                                                              │
-                                                              ▼
-                                                         llm (prompt 拼装)
-                                                              │
-                                                              ▼
-                                                         chat (SSE 流式输出)</div>
+    <div class="callout">
+      <span class="ctitle">为什么 RAG 用 HNSW 不用暴力搜索？</span>
+      暴力搜索 O(N) 对每查询都遍历全部向量，N=100 万时单次 >500ms。HNSW 是工业级 ANN 算法，
+      <em>理论 O(log N) 实际查询</em>，10 万向量 <code>TopK=10</code> 仅需 ~5ms。
+      <strong>代价</strong>是构建慢（O(N log N)）+ 内存大（每向量多个邻居指针）+ 不能精确（recall 95%+）。
+      详见本页设计分析第 3 节。
+    </div>
 
     <div class="block">
       <div class="block-head">
@@ -296,6 +364,463 @@
         <tr><td>chat.go</td><td>retrieve → prompt → LLM SSE 流式</td></tr>
       </tbody>
     </table>
+
+    <section class="analysis" id="analysis">
+      <h2>设计深度分析</h2>
+      <p class="lead">
+        下面把微服务层的设计决策拆成四类：<strong>崩溃恢复</strong>（按服务分别看）、
+        <strong>核心技术选型</strong>（HNSW vs 暴力搜索 / bcrypt vs argon2 / 独立进程 vs 单体）、
+        <strong>服务间通信</strong>（HTTP vs gRPC vs MQ）、<strong>整体取舍与优化方向</strong>。
+      </p>
+
+      <h3>1. 崩溃恢复 · 五种服务场景</h3>
+      <p>
+        微服务层是<em>有状态服务 + 无状态接入</em>的混合：Auth 持 Redis jti，Data 持 MiniKV 连接，RAG 持 HNSW 内存索引。
+        崩溃语义各不相同。
+      </p>
+
+      <div class="scenario-grid">
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">CASE 1</span><span class="stitle">Auth 服务崩溃</span></div>
+          <p class="sbody">
+            Auth 进程崩。Redis jti 黑名单仍在 Redis 中持久化；用户表在 MiniKV 不丢失。
+            重启后 Auth 进程继续读写 Redis 与 MiniKV。
+          </p>
+          <p class="sbody">
+            <strong>影响：</strong>注册 / 登录 / 刷新 / API Key 签发短暂不可用 → 网关返回 502。
+            <strong>恢复：</strong>supervisor 重启，毫秒级恢复。<strong>优化：</strong>多副本 + K8s liveness probe 自动重启。
+          </p>
+          <span class="sresult ok">恢复语义：状态在 Redis / MiniKV · 快速重启</span>
+        </div>
+
+        <div class="scenario danger">
+          <div class="shead"><span class="snum">CASE 2</span><span class="stitle">Data 服务崩溃</span></div>
+          <p class="sbody">
+            Data 进程崩，<code>MINIKV_ADDR</code> 连接断开。MiniKV 数据仍在，下次重启 Data 自动重连。
+          </p>
+          <p class="sbody">
+            <strong>影响：</strong>KV 读写不可用 → 网关 502。
+            <strong>恢复：</strong>重启重连，毫秒级。<strong>优化：</strong>多副本 + LB，单副本崩不影响整体。
+          </p>
+          <span class="sresult ok">恢复语义：无状态 · 重连即可</span>
+        </div>
+
+        <div class="scenario danger">
+          <div class="shead"><span class="snum">CASE 3</span><span class="stitle">RAG 服务崩溃 · HNSW 内存丢失</span></div>
+          <p class="sbody">
+            RAG 进程崩。HNSW 索引在内存中，重启后<em>从 SaveSnapshot 重建</em>，向量原数据在 MiniKV 不丢。
+          </p>
+          <p class="sbody">
+            <strong>为什么这么设计：</strong>HNSW 索引构建慢（O(N log N)），但读快；持久化用 JSON 快照，重启时一次性加载。
+            <strong>代价：</strong>大索引重建慢（100 万向量 ~10s）；<strong>优化：</strong>(1) 周期性自动 snapshot；(2) 用 mmap 持久化，零拷贝加载；(3) 用 FAISS / Milvus 等成熟向量库。
+          </p>
+          <span class="sresult bad">恢复语义：重建索引 · 慢</span>
+        </div>
+
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">CASE 4</span><span class="stitle">Meta 服务崩溃 · Schema 丢失</span></div>
+          <p class="sbody">
+            Meta 进程崩。Schema 在 MiniKV 不丢；watcher 监听断开，订阅者短暂收不到变更事件。
+          </p>
+          <p class="sbody">
+            <strong>影响：</strong>Schema 查询不可用；watcher 重启后需要 catch-up 重新订阅。
+            <strong>优化：</strong>(1) Meta 把变更事件写 MiniKV，watcher 重启时回放；(2) 用 etcd watch 替代自实现 watcher。
+          </p>
+          <span class="sresult ok">恢复语义：Schema 在 KV · watcher 重订阅</span>
+        </div>
+
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">CASE 5</span><span class="stitle">Observability 服务崩溃</span></div>
+          <p class="sbody">
+            Observability 进程崩。scraper 周期采集中断，Prometheus 抓不到数据；历史指标仍在。
+          </p>
+          <p class="sbody">
+            <strong>影响：</strong>监控短期盲区；Prometheus 抓取失败告警。
+            <strong>恢复：</strong>重启 scraper 继续采集；<em>监控是只读，崩了不影响业务</em>。
+          </p>
+          <span class="sresult ok">恢复语义：只读 · 不影响业务</span>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">微服务崩溃恢复的统一原则</span>
+        <em>状态外置</em> → 服务本身无状态或薄状态：Auth 把 jti 放 Redis，Data 把数据放 MiniKV，Meta 把 Schema 放 MiniKV。
+        <strong>好处：</strong>任意服务崩了重启即恢复；<strong>代价：</strong>RAG 的 HNSW 索引内存态重建慢，需特殊处理。
+      </div>
+
+      <h3>2. Auth · bcrypt vs argon2 · 密码哈希选型</h3>
+      <p>
+        Auth 用 bcrypt 做密码哈希，对比 argon2 / scrypt / PBKDF2。
+      </p>
+
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>bcrypt（本实现）</th><th>argon2</th><th>scrypt</th><th>PBKDF2</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>算法</strong></td>
+            <td>Blowfish 派生</td>
+            <td>是 PHC winner</td>
+            <td>内存硬</td>
+            <td>通用 KDF</td>
+          </tr>
+          <tr>
+            <td><strong>抗 GPU/ASIC</strong></td>
+            <td class="lose">中</td>
+            <td class="win">高（内存硬）</td>
+            <td>高</td>
+            <td class="lose">低</td>
+          </tr>
+          <tr>
+            <td><strong>Go 标准库</strong></td>
+            <td class="win">golang.org/x/crypto/bcrypt</td>
+            <td>需引入 argon2 lib</td>
+            <td>需引入</td>
+            <td class="win">crypto/pbkdf2</td>
+          </tr>
+          <tr>
+            <td><strong>易用性</strong></td>
+            <td class="win">一行 GenerateFromPassword</td>
+            <td>需调参</td>
+            <td>需调参</td>
+            <td class="win">易用</td>
+          </tr>
+          <tr>
+            <td><strong>行业先例</strong></td>
+            <td class="win">Django / Rails / Spring</td>
+            <td>新系统首选</td>
+            <td>Litecoin / Dropbox</td>
+            <td>老系统</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="procon">
+        <div class="pros">
+          <h4>选 bcrypt 的好处 <span class="badge">Pros</span></h4>
+          <ul>
+            <li><strong>Go 标准库：</strong><code>x/crypto/bcrypt</code> 一行调用，自带盐。</li>
+            <li><strong>抗彩虹表：</strong>自带随机盐，同密码不同哈希。</li>
+            <li><strong>可调成本：</strong><code>cost=10</code>，硬件升级可调高。</li>
+            <li><strong>生态成熟：</strong>大多数后端框架默认。</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>选 bcrypt 的代价 <span class="badge">Cons</span></h4>
+          <ul>
+            <li><strong>抗 GPU 不如 argon2：</strong>不内存硬，GPU 暴力破解友好。</li>
+            <li><strong>密码长度限制 72 字节：</strong>长密码会被截断（需预 SHA256）。</li>
+            <li><strong>不是 PHC winner：</strong>新项目应该选 argon2id。</li>
+            <li><strong>cost 难动态调：</strong>已存哈希 cost 固定，升级需重新哈希。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">密码哈希的优化方向</span>
+        (1) <strong>迁移到 argon2id：</strong>PHC winner，内存硬，抗 GPU。<br>
+        (2) <strong>密码预哈希：</strong>对 >72 字节密码先 SHA256，避免 bcrypt 截断。<br>
+        (3) <strong>pepper：</strong>哈希前加 server-side secret，DB 泄漏 + pepper 未知仍难破。<br>
+        (4) <strong>慢哈希迁移：</strong>登录时若哈希算法过期，重新用新算法哈希后存回，透明迁移。
+      </div>
+
+      <h3>3. RAG · HNSW vs 暴力搜索 · 向量索引选型</h3>
+      <p>
+        RAG 默认用 HNSW（<code>RAG_INDEX_TYPE=hnsw</code>），可切换 SideIndex（暴力）。
+      </p>
+
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>HNSW（本实现）</th><th>暴力 SideIndex</th><th>IVF</th><th>FAISS-IVF-PQ</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>查询复杂度</strong></td>
+            <td class="win">O(log N)</td>
+            <td class="lose">O(N)</td>
+            <td>O(√N)</td>
+            <td class="win">O(log N) 近似</td>
+          </tr>
+          <tr>
+            <td><strong>构建复杂度</strong></td>
+            <td>O(N log N)</td>
+            <td class="win">O(1)</td>
+            <td>O(N)</td>
+            <td>O(N)</td>
+          </tr>
+          <tr>
+            <td><strong>内存</strong></td>
+            <td class="lose">大（每节点 m 个邻居指针）</td>
+            <td>仅向量</td>
+            <td>中</td>
+            <td class="win">小（PQ 压缩）</td>
+          </tr>
+          <tr>
+            <td><strong>召回率</strong></td>
+            <td class="win">95%+</td>
+            <td class="win">100%</td>
+            <td>90%+</td>
+            <td>85%+</td>
+          </tr>
+          <tr>
+            <td><strong>持久化</strong></td>
+            <td class="lose">复杂（图结构）</td>
+            <td class="win">仅向量</td>
+            <td>中</td>
+            <td>中</td>
+          </tr>
+          <tr>
+            <td><strong>实现量</strong></td>
+            <td class="lose">~600 行</td>
+            <td class="win">~30 行</td>
+            <td>~200 行</td>
+            <td>用现成库</td>
+          </tr>
+          <tr>
+            <td><strong>N=10万查询延迟</strong></td>
+            <td class="win">~5ms</td>
+            <td class="lose">~500ms</td>
+            <td>~20ms</td>
+            <td class="win">~3ms</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="procon">
+        <div class="pros">
+          <h4>选 HNSW 的好处 <span class="badge">Pros</span></h4>
+          <ul>
+            <li><strong>查询快：</strong>O(log N)，10 万向量 ~5ms，符合在线 RAG 实时性。</li>
+            <li><strong>召回率高：</strong>95%+，足够 RAG 场景（<em>不要求 100% 精确</em>）。</li>
+            <li><strong>插入实时：</strong>Add() 可在线插入，不需重建索引。</li>
+            <li><strong>参数少：</strong>m / ml / ef 三个参数好调。</li>
+            <li><strong>接口与 SideIndex 兼容：</strong>可平滑切换，便于测试对比。</li>
+            <li><strong>行业主流：</strong>faiss-hnsw / Milvus / NMSLIB 都用 HNSW。</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>选 HNSW 的代价 <span class="badge">Cons</span></h4>
+          <ul>
+            <li><strong>内存大：</strong>每向量 ~16 个邻居指针，N=100万内存 ~400MB。</li>
+            <li><strong>构建慢：</strong>O(N log N)，10 万向量构建 ~30s。</li>
+            <li><strong>持久化复杂：</strong>图结构 JSON 序列化，文件大；mmap 持久化需重写。</li>
+            <li><strong>删除难：</strong>HNSW 不支持高效删除，需标记墓碑或重建。</li>
+            <li><strong>并发难：</strong>插入需锁，影响查询吞吐。</li>
+            <li><strong>不能精确：</strong>95% 召回，剩余 5% 可能漏关键 chunk。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">为什么不直接用 FAISS / Milvus？</span>
+        FAISS / Milvus 是成熟向量库，性能 / 功能 / 工程化都远超自实现 HNSW。但本实现自写 HNSW：
+        <ul style="margin-top:6px">
+          <li>(1) <strong>学习目的：</strong>理解 HNSW 算法，面试能讲清细节。</li>
+          <li>(2) <strong>无外部依赖：</strong>纯 Go 实现，部署简单。</li>
+          <li>(3) <strong>可定制：</strong>嵌入 MiniKV key 空间，与 LSM-Tree 集成。</li>
+        </ul>
+        <strong>生产场景</strong>应该用 Milvus / Qdrant / Weaviate 等成熟向量库。
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">HNSW 的优化方向</span>
+        (1) <strong>mmap 持久化：</strong>用 mmap 替代 JSON 序列化，零拷贝加载，10x 加速。<br>
+        (2) <strong>分片索引：</strong>按 collection 分索引，避免单索引膨胀。<br>
+        (3) <strong>墓碑删除：</strong>标记删除而非物理删除，定期重建清理墓碑。<br>
+        (4) <strong>PQ 量化压缩：</strong>对向量做乘积量化，内存省 8-16x。<br>
+        (5) <strong>并发优化：</strong>分片锁 / 无锁读，提高并发查询吞吐。<br>
+        (6) <strong>GPU 加速：</strong>对 GPU 友好的 IVF-PQ 替代，吞吐 ×100。
+      </div>
+
+      <h3>4. 服务间通信 · HTTP vs gRPC vs MQ</h3>
+      <p>
+        当前所有服务间走 HTTP（Gateway → Auth/Data/Meta/Observ/RAG），对比 gRPC 与 MQ。
+      </p>
+
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>HTTP / REST</th><th>gRPC</th><th>MQ（Kafka/NATS）</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>序列化</strong></td>
+            <td>JSON（文本）</td>
+            <td class="win">Protobuf（二进制）</td>
+            <td>多种</td>
+          </tr>
+          <tr>
+            <td><strong>性能</strong></td>
+            <td>5-10k QPS</td>
+            <td class="win">50-100k QPS</td>
+            <td>异步</td>
+          </tr>
+          <tr>
+            <td><strong>流式</strong></td>
+            <td>SSE（单向）</td>
+            <td class="win">双向流</td>
+            <td class="win">天然</td>
+          </tr>
+          <tr>
+            <td><strong>调试</strong></td>
+            <td class="win">curl / 浏览器直连</td>
+            <td>需 grpcurl</td>
+            <td>需 MQ 工具</td>
+          </tr>
+          <tr>
+            <td><strong>解耦</strong></td>
+            <td class="lose">同步耦合</td>
+            <td class="lose">同步耦合</td>
+            <td class="win">异步解耦</td>
+          </tr>
+          <tr>
+            <td><strong>IDL</strong></td>
+            <td class="lose">无</td>
+            <td class="win">.proto 文件</td>
+            <td>schema registry</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="procon">
+        <div class="pros">
+          <h4>选 HTTP 的好处 <span class="badge">Pros</span></h4>
+          <ul>
+            <li><strong>实现简单：</strong>Go net/http + JSON，几行搞定。</li>
+            <li><strong>调试友好：</strong>curl / Postman / 浏览器都行。</li>
+            <li><strong>SSE 流式：</strong>chat 用 <code>text/event-stream</code>，浏览器原生支持。</li>
+            <li><strong>生态成熟：</strong>中间件 / 监控 / 文档生成工具链完整。</li>
+            <li><strong>无 IDL 依赖：</strong>不需要 protoc 编译步骤。</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>选 HTTP 的代价 <span class="badge">Cons</span></h4>
+          <ul>
+            <li><strong>序列化慢：</strong>JSON 比 protobuf 慢 5-10x，体积大 2-3x。</li>
+            <li><strong>无 schema：</strong>字段拼写错只能运行时发现。</li>
+            <li><strong>无双向流：</strong>chat 只能 SSE 单向，无法双向。</li>
+            <li><strong>无重试预算：</strong>gRPC 自带 deadline propagation。</li>
+            <li><strong>同步耦合：</strong>无 MQ 异步解耦，服务故障传播。</li>
+            <li><strong>无 backpressure：</strong>慢消费者拖累服务端。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">服务间通信的优化方向</span>
+        (1) <strong>gRPC + protobuf：</strong>对内部服务通信用 gRPC，吞吐 ×5-10。<br>
+        (2) <strong>NATS / Kafka 异步：</strong>对 ingest 用 MQ 解耦，文档入库异步处理。<br>
+        (3) <strong>GraphQL BFF：</strong>前端聚合用 BFF 一次取多服务数据。<br>
+        (4) <strong>服务网格 Istio：</strong>把熔断 / 重试 / observability 下沉到 sidecar。<br>
+        (5) <strong>双向流 gRPC：</strong>RAG chat 用双向流替代 SSE，体验更好。<br>
+        (6) <strong>schema registry：</strong>JSON 也加 schema 验证，避免拼写错。
+      </div>
+
+      <h3>5. 整体取舍 · 单体 vs 微服务 vs Service Mesh</h3>
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>微服务（本实现）</th><th>单体</th><th>Service Mesh</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>开发速度</strong></td>
+            <td>中</td>
+            <td class="win">快（无网络）</td>
+            <td class="lose">慢（sidecar 配置）</td>
+          </tr>
+          <tr>
+            <td><strong>独立部署</strong></td>
+            <td class="win">是</td>
+            <td class="lose">否</td>
+            <td class="win">是</td>
+          </tr>
+          <tr>
+            <td><strong>故障隔离</strong></td>
+            <td class="win">单服务挂不拖累其他</td>
+            <td class="lose">一挂全挂</td>
+            <td class="win">完整熔断</td>
+          </tr>
+          <tr>
+            <td><strong>性能</strong></td>
+            <td class="lose">多一次网络</td>
+            <td class="win">进程内调用</td>
+            <td class="lose">多 sidecar</td>
+          </tr>
+          <tr>
+            <td><strong>运维</strong></td>
+            <td class="lose">5 服务监控</td>
+            <td class="win">1 进程</td>
+            <td class="lose">sidecar + 控制面</td>
+          </tr>
+          <tr>
+            <td><strong>团队规模</strong></td>
+            <td>多团队</td>
+            <td>小团队</td>
+            <td>大团队</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        <span class="ctitle">整体结论 · 为什么选 5 微服务拆分</span>
+        目标场景是「<em>面试项目 + 演示分层 + 不同技术栈</em>」：
+        <ul style="margin-top:6px">
+          <li><strong>职责单一：</strong>Auth 只做鉴权，Data 只做 KV，RAG 只做检索生成，边界清晰。</li>
+          <li><strong>故障隔离：</strong>RAG 重启不拖累 Auth / Data。</li>
+          <li><strong>独立扩展：</strong>RAG 流量大时单独扩 RAG。</li>
+          <li><strong>覆盖技术栈：</strong>覆盖 HTTP / SSE / 原生 TCP / Redis 多种通信模式。</li>
+        </ul>
+        <strong>代价</strong>是多一次网络 RTT + 5 套监控部署成本——适合演示与面试，<em>不适合生产小团队</em>。
+      </div>
+
+      <h3>6. 设计原则总结</h3>
+      <div class="scenario-grid">
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">原则 1</span><span class="stitle">状态外置</span></div>
+          <p class="sbody">状态放 Redis / MiniKV，服务本身无状态，崩了重启即恢复。</p>
+        </div>
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">原则 2</span><span class="stitle">职责单一</span></div>
+          <p class="sbody">每服务一个职责，Auth 只鉴权、Data 只 KV、RAG 只检索。</p>
+        </div>
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">原则 3</span><span class="stitle">接口抽象</span></div>
+          <p class="sbody">VectorIndex 抽象 HNSW 与 SideIndex，可平滑切换。</p>
+        </div>
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">原则 4</span><span class="stitle">HTTP + SSE 易调试</span></div>
+          <p class="sbody">服务间通信用 HTTP/SSE，调试友好，符合教学场景。</p>
+        </div>
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">原则 5</span><span class="stitle">环境变量配置</span></div>
+          <p class="sbody">配置走环境变量 + 默认值兜底，无外部配置文件依赖。</p>
+        </div>
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">原则 6</span><span class="stitle">内存回退</span></div>
+          <p class="sbody">无 MiniKV 时 Data 回退内存 store，本地快速跑通。</p>
+        </div>
+        <div class="scenario danger">
+          <div class="shead"><span class="snum">原则 7</span><span class="stitle">HNSW 内存态重建</span></div>
+          <p class="sbody">RAG 索引内存态，重启重建慢；接受换取查询快。</p>
+        </div>
+        <div class="scenario danger">
+          <div class="shead"><span class="snum">原则 8</span><span class="stitle">无事务回滚</span></div>
+          <p class="sbody">ingest 中途失败不回滚，已 embed 的入索引，未 embed 的需重试。</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">微服务实现边界（如实告知）</span>
+        本实现是教学级微服务层，相比生产环境仍有差距：<br>
+        (1) 无 gRPC，全 HTTP 性能受限；<br>
+        (2) 无服务发现，靠环境变量；<br>
+        (3) 无服务网格（Istio），熔断 / 重试需自实现；<br>
+        (4) HNSW 是简化版，无 PQ 量化、无 mmap 持久化；<br>
+        (5) RAG 无事务回滚，ingest 失败部分入库；<br>
+        (6) Observability 仅 scrape，无 push gateway。<br>
+        这些都是<em>教学版与产品级微服务的差距</em>，也是本页面设计分析的优化方向所在。
+      </div>
+    </section>
 
   </main>
 </div>

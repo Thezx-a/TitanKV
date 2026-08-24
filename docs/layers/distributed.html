@@ -56,21 +56,56 @@
       </div>
     </div>
 
+    <figure class="layer-banner">
+      <img alt="Raft 共识算法概念图" src="https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=Minimalist%20editorial%20illustration%20of%20Raft%20consensus%20algorithm%20warm%20cream%20beige%20background%20deep%20navy%20blue%20leader%20node%20with%20two%20follower%20nodes%20log%20replication%20arrows%20flowing%20between%20them%20majority%20quorum%20highlight%20clean%20geometric%20blocks%20soft%20slate%20gray%20accents%20elegant%20flat%20design%20no%20text%20no%20words%20no%20letters&image_size=landscape_16_9" />
+    </figure>
+
     <h2>Raft 核心三件套</h2>
     <p>Raft 用 FSM（有限状态机）抽象让副本间状态一致：所有写都通过 <code>Apply(log)</code> 顺序执行，<code>Snapshot</code> 截断日志，<code>Restore</code> 重建状态。</p>
 
-    <div class="arch-diagram">Client ──▶ raft.Apply(Log{op, key, value})   (leader 提交, 半数复制后 commit)
-                    │
-                    ▼
-              KVFSM.Apply(l *raft.Log)
-                    │  decodeCommand → applyLocal
-                    ▼
-              in-memory map[key] = value     ← 真理源 (source of truth)
-                    │
-                    ├── best-effort ▼ WriteForwarder.Put(key, value)  → MiniKV (非阻塞, 不影响 Apply)
-                    │
-              Snapshot()  ──▶ Persist(sink)  JSON 编码整个 map → raft snapshot 文件
-              Restore(rc) ──▶ JSON 解码 → 替换 map   (重启/追赶时重建状态)</div>
+    <div class="vflow">
+      <div class="vstep"><div class="vnode">1</div><div class="vbody">
+        <p class="vtitle">Client 提交写请求 <span class="vtag safe">http.go</span></p>
+        <p class="vdesc">客户端调用 <code>/raft/put</code>，HTTP handler 把 <code>{op, key, value}</code> 编码成 <code>raft.Log</code> 载荷。</p>
+        <p class="vdetail"><strong>崩溃点 A：</strong>请求未到达 leader → 客户端超时重试；集群无状态变更。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">2</div><div class="vbody">
+        <p class="vtitle">raft.Apply(Log) <span class="vtag safe">raft</span></p>
+        <p class="vdesc">leader 把 Log 复制到半数副本后 commit，再回调 <code>KVFSM.Apply(l *raft.Log)</code>。</p>
+        <p class="vdetail"><strong>崩溃点 B：</strong>leader 复制到一半崩溃 → 未 commit 的 Log 在新 leader 任期被覆盖；客户端感知超时后重试（Raft 不保证 exactly-once，需上层去重）。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">3</div><div class="vbody">
+        <p class="vtitle">KVFSM.Apply · decodeCommand → applyLocal <span class="vtag safe">fsm.go</span></p>
+        <p class="vdesc"><code>opPut</code> 写 <code>f.data[key]=value</code>，<code>opDelete</code> 删除。<strong>Apply 必须确定性</strong>：所有副本按相同顺序执行同一条 Log，最终状态一致。</p>
+        <p class="vdetail"><strong>崩溃点 C：</strong>Apply 中途进程崩 → 重启后 raft 重放未 Snapshot 的 Log，FSM 重新 Apply 到一致状态。Apply 函数本身必须幂等（map 写入天然幂等）。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">4</div><div class="vbody">
+        <p class="vtitle">真理源 · in-memory map[key] = value <span class="vtag warn">fsm.go</span></p>
+        <p class="vdesc">所有副本的 map 在 Apply 后<strong>最终一致</strong>。读操作直接读本地 map，<strong>不走 Raft</strong>——读不要求强一致（最终一致即足够）。</p>
+        <p class="vdetail"><strong>崩溃点 D：</strong>map 在内存中进程崩就丢失，但 raft 日志在磁盘；重启走 Restore 重建。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">5</div><div class="vbody">
+        <p class="vtitle">WriteForwarder.Put · best-effort 镜像 <span class="vtag warn">minikv_forward.go</span></p>
+        <p class="vdesc"><strong>异步、非阻塞</strong>把写入转发到 MiniKV，作为 LSM-Tree 持久层。<strong>关键约束：转发失败绝不能让 Apply 失败</strong>——外部 IO 是非确定性的，会让副本发散。</p>
+        <p class="vdetail"><strong>崩溃点 E：</strong>MiniKV 写失败 → map 已更新但 LSM 未同步；重启后从 raft 重建真理源，MiniKV 演进到最终一致（或在读路径回退到 FSM）。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">6</div><div class="vbody">
+        <p class="vtitle">Snapshot() · Persist(sink) <span class="vtag safe">fsm.go</span></p>
+        <p class="vdesc">raft 定期调 <code>Snapshot</code>，FSM 读锁克隆整个 map → JSON 编码写入 <code>raftSnapshotSink</code>，截断已 Apply 的旧 Log。</p>
+        <p class="vdetail"><strong>崩溃点 F：</strong>Persist 写到一半崩 → <code>sink.Cancel()</code>，raft 下次重试 Snapshot；不会污染状态。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">7</div><div class="vbody">
+        <p class="vtitle">Restore(rc) · 重启 / 新副本追赶 <span class="vtag safe">fsm.go</span></p>
+        <p class="vdesc">进程重启或新副本加入时，raft 先 Restore 最近的 snapshot，再重放 snapshot 之后的 Log。FSM 的 <code>Restore</code> 用 JSON 解码后<strong>整体替换</strong> <code>f.data</code>。</p>
+        <p class="vdetail"><strong>崩溃点 G：</strong>snapshot 文件损坏 → raft 拒绝启动；需运维介入或回退更早 snapshot。</p>
+      </div></div>
+    </div>
 
     <h2>核心组件知识点</h2>
 

@@ -56,17 +56,75 @@
       </div>
     </div>
 
-    <h2>洋葱模型中间件链</h2>
+    <figure class="layer-banner">
+      <img alt="API Gateway 洋葱中间件概念图" src="https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=Minimalist%20editorial%20illustration%20of%20an%20API%20gateway%20onion%20middleware%20architecture%20warm%20cream%20beige%20background%20deep%20navy%20blue%20concentric%20rings%20or%20layers%20representing%20nested%20middleware%20request%20flow%20arrows%20passing%20through%20layers%20auth%20and%20rate%20limit%20icons%20soft%20slate%20gray%20accents%20clean%20geometric%20flat%20design%20elegant%20no%20text%20no%20words%20no%20letters&image_size=landscape_16_9" />
+    </figure>
+
+    <h2>请求处理竖向流程 · 洋葱中间件链</h2>
     <p>中间件按注册顺序包裹，外层先执行 <code>before</code>、内层先执行 <code>after</code>。顺序很关键：<code>Recover</code> 必须在 <code>Logger</code> 之后（Logger 才能记到 panic），<code>Auth</code> 必须在 <code>RBAC</code> 之前（先识别身份再判权限）。</p>
 
-    <div class="arch-diagram">请求 ──▶ RequestID  ──▶ Logger ──▶ Recover ──▶ RateLimit ──▶ Auth ──▶ RBAC ──▶ Handler
-                                                                              │          │
-                                                                              ▼          ▼
-                                                                       解析 JWT/APIKey    检查角色权限
-                                                                       (失败 401)        (失败 403)
+    <div class="vflow">
+      <div class="vstep"><div class="vnode">1</div><div class="vbody">
+        <p class="vtitle">RequestID <span class="vtag safe">middleware/request_id.go</span></p>
+        <p class="vdesc">生成 uuid，写入 <code>X-Request-ID</code> 头 + <code>c.Set("request_id")</code>，串联后续日志与追踪。</p>
+        <p class="vdetail"><strong>关键：</strong>优先读客户端传入的 <code>X-Request-ID</code>（兼容上游追踪），否则新建。</p>
+      </div></div>
 
-  内层 Handler 处理完 → 按洋葱倒序回弹 → RBAC.after → Auth.after → RateLimit.after → ... → RequestID.after
-  全程同一个 goroutine，RequestID 贯穿日志与追踪。</div>
+      <div class="vstep"><div class="vnode">2</div><div class="vbody">
+        <p class="vtitle">Logger <span class="vtag safe">middleware/logger.go</span></p>
+        <p class="vdesc">结构化记录 method/path/status/latency，附 RequestID；Recover 在其后才能记 panic。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">3</div><div class="vbody">
+        <p class="vtitle">Recover <span class="vtag safe">middleware/recover.go</span></p>
+        <p class="vdesc">defer recover() 捕获 panic，记日志后返回 500，进程不崩。</p>
+        <p class="vdetail"><strong>崩溃点 A：</strong>Handler panic 由 Recover 接住 → 500 响应 + 进程存活；否则会挂掉整个 Gin worker。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">4</div><div class="vbody">
+        <p class="vtitle">RateLimit <span class="vtag safe">middleware/ratelimit.go</span></p>
+        <p class="vdesc">Redis Lua 令牌桶 <code>burst=100, sustained=10/s</code>；Redis 不可用时降级放行。</p>
+        <p class="vdetail"><strong>崩溃点 B：</strong>Redis 抖动 → 降级无限制；否则会让全部请求被限流。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">5</div><div class="vbody">
+        <p class="vtitle">Auth · 你是谁 <span class="vtag safe">middleware/auth.go</span></p>
+        <p class="vdesc">优先 Bearer JWT（强制 HMAC 拒 alg:none），其次 X-API-Key；jti 黑名单查 Redis。</p>
+        <p class="vdetail"><strong>崩溃点 C：</strong>Redis 查 jti 失败 → 放行（不阻断）；否则全量 401。</p>
+        <p class="vdetail"><strong>失败 401：</strong>缺 token / 解析失败 / 已吊销。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">6</div><div class="vbody">
+        <p class="vtitle">RBAC · 你能干啥 <span class="vtag safe">middleware/rbac.go</span></p>
+        <p class="vdesc">基于 role 查权限矩阵，<code>required</code> 权限未命中返回 403。</p>
+        <p class="vdetail"><strong>细粒度方法映射：</strong>GET=kv:get / POST|PUT=kv:put / DELETE=kv:delete。</p>
+        <p class="vdetail"><strong>失败 403：</strong>身份已识别但权限不足。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">7</div><div class="vbody">
+        <p class="vtitle">ReverseProxy · 前缀路由 + 身份注入 <span class="vtag safe">handler/proxy.go</span></p>
+        <p class="vdesc">按 <code>prefix → target</code> 选上游，注入 <code>X-User-ID / X-Role / X-Request-ID</code>。</p>
+        <p class="vdetail"><strong>崩溃点 D：</strong>上游服务不可达 → 502 Bad Gateway；客户端收到错误响应。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">8</div><div class="vbody">
+        <p class="vtitle">Handler 业务处理 <span class="vtag safe">backend services</span></p>
+        <p class="vdesc">Data / Meta / Observability / RAG 后端 Gin 处理请求，可能写 MiniKV。</p>
+        <p class="vdetail"><strong>崩溃点 E：</strong>业务协程 panic 由 Recover 兜底；MiniKV 写失败由后端事务层兜底。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode alt">9</div><div class="vbody">
+        <p class="vtitle">回弹 · 洋葱倒序 after</p>
+        <p class="vdesc">Handler 返回 → RBAC.after → Auth.after → RateLimit.after → Logger.after → RequestID.after → 响应客户端。</p>
+        <p class="vdetail"><strong>关键：</strong>全程同一 goroutine，<code>X-Request-ID</code> 贯穿日志与追踪。</p>
+      </div></div>
+    </div>
+
+    <div class="callout">
+      <span class="ctitle">为什么 Recover 必须在 Logger 之后？</span>
+      Logger 的 <code>c.Next()</code> 调用后等待内层结束；若 Recover 在 Logger 内层，Handler panic 会先被 Recover 接住，
+      再回弹到 Logger，Logger 才能记到 <code>panic</code> 日志。如果反过来，Recover 在最外层，panic 先被 Recover 接住但 Logger 已退出，记不到。
+    </div>
 
     <h2>核心组件知识点</h2>
 
@@ -218,6 +276,451 @@ cmd/gateway/main.go   → gateway.Run()
   GATEWAY_ADDR=:18080 (run-all)
   *_SERVICE_URL → Auth/Data/Meta/Observ/RAG
   REDIS_ADDR, JWT_SECRET</code></pre>
+
+    <section class="analysis" id="analysis">
+      <h2>设计深度分析</h2>
+      <p class="lead">
+        下面把网关的设计决策拆成四类：<strong>崩溃恢复</strong>（中间件链 / 上游服务 / Redis 三种场景）、
+        <strong>核心技术选型</strong>（JWT + jti 黑名单 vs Session、Redis 令牌桶 vs 滑动窗口、洋葱中间件 vs Filter Chain）、
+        <strong>RBAC 权限模型</strong>（基于角色 vs 基于 ACL）、<strong>整体取舍与优化方向</strong>。
+      </p>
+
+      <h3>1. 崩溃恢复 · 五种场景</h3>
+      <p>
+        网关是<em>有中间状态但无持久化</em>的层：Redis 是依赖（jti 黑名单 / 限流），但 Redis 不可用要走降级；上游服务会失败，要做熔断与重试。
+        核心不变量：<strong>JWT 自验证 + Redis 可降级 + 上游失败可回滚。</strong>
+      </p>
+
+      <div class="scenario-grid">
+        <div class="scenario danger">
+          <div class="shead"><span class="snum">CASE 1</span><span class="stitle">崩溃点 A · Handler panic</span></div>
+          <p class="sbody">
+            业务 Handler panic（如 nil 指针、越界访问）。<code>Recover</code> 中间件 <code>defer recover()</code> 接住，记日志返回 500，<em>进程不崩</em>。
+          </p>
+          <p class="sbody">
+            <strong>为什么这么设计：</strong>Go 协程 panic 不接住会拖死整个进程；<code>gin.Recovery()</code> 在最外层接住所有 panic。
+            <strong>好处：</strong>进程存活，其他请求不受影响；<strong>缺点：</strong>状态可能不一致（如已开始写 MiniKV 中途 panic）。
+          </p>
+          <span class="sresult ok">恢复语义：500 响应 · 进程存活</span>
+        </div>
+
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">CASE 2</span><span class="stitle">崩溃点 B · Redis 限流不可用</span></div>
+          <p class="sbody">
+            Redis 抖动 / 宕机，<code>RateLimit</code> Lua 脚本调用失败。当前实现<em>降级放行</em>，不限流。
+          </p>
+          <p class="sbody">
+            <strong>为什么这么设计：</strong>限流是<em>附加能力</em>不是必需；宁可放过流量也不阻断业务。<strong>代价：</strong>Redis 抖动期间可能被刷爆。
+            <strong>优化方向：</strong>本地 fallback 用 <code>golang.org/x/time/rate</code> token bucket，进程内限流 + Redis 协同限流。
+          </p>
+          <span class="sresult bad">恢复语义：降级放行 · 风险过载</span>
+        </div>
+
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">CASE 3</span><span class="stitle">崩溃点 C · Redis jti 黑名单查询失败</span></div>
+          <p class="sbody">
+            Redis 暂时不可达，<code>isRevoked(jti)</code> 查询失败。<em>当前实现返回 false</em>，即认为 token 未吊销，放行。
+          </p>
+          <p class="sbody">
+            <strong>为什么这么设计：</strong>避免 Redis 抖动让全部请求被踢 401；<strong>代价：</strong>登出的 token 在 Redis 故障期间仍可用。
+            <strong>优化方向：</strong>本地缓存一份最近吊销的 jti 短期 TTL，配合「Redis 失败 → 用本地缓存兜底」策略。
+          </p>
+          <span class="sresult bad">恢复语义：放行可能已吊销 token · 安全降级</span>
+        </div>
+
+        <div class="scenario danger">
+          <div class="shead"><span class="snum">CASE 4</span><span class="stitle">崩溃点 D · 上游服务不可达</span></div>
+          <p class="sbody">
+            <code>httputil.ReverseProxy</code> 转发到 Data/Meta/RAG，上游宕机返回 502/连接拒绝。
+          </p>
+          <p class="sbody">
+            <strong>当前实现：</strong>仅返回 502；无重试（避免非幂等操作重复写入）。
+            <strong>优化方向：</strong>(1) 上游服务多副本 + LB（skynet 已支持）；(2) 对幂等 GET 自动重试 1-2 次；(3) 熔断器：失败累计超阈值 → 暂停转发 + 周期性半开探测。
+          </p>
+          <span class="sresult bad">恢复语义：502 · 客户端重试</span>
+        </div>
+
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">CASE 5</span><span class="stitle">优雅停机 · SIGTERM</span></div>
+          <p class="sbody">
+            K8s/Supervisor 发 SIGTERM，<code>srv.Shutdown(5s)</code> 拒新连接，等已有连接处理完。
+          </p>
+          <p class="sbody">
+            <strong>为什么这么设计：</strong>避免请求半截被杀。<strong>缺点：</strong>5s 不够长连接 keep-alive，可能丢；<strong>优化：</strong>停机前从 K8s endpoints 摘除 + 等 grace 期结束才真正退出。
+          </p>
+          <span class="sresult ok">恢复语义：无中断退出</span>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">为什么网关依赖 Redis 但 Redis 不可用不阻断业务？</span>
+        网关的设计哲学是「<em>Redis 是优化项不是关键依赖</em>」：JWT 自验证（HMAC）不需要 Redis；
+        限流和 jti 黑名单是 Redis 提供，但都设计了降级路径。这避免了「Redis 抖一下全站挂」的连锁故障。
+        <strong>代价</strong>是 Redis 故障期间安全降级（放过已吊销 token），需要配合监控告警及时发现。
+      </div>
+
+      <h3>2. JWT + jti 黑名单 vs Session · 为什么选 JWT</h3>
+      <p>
+        网关用 JWT + Redis jti 黑名单双轨，对比传统 Session。
+      </p>
+
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>JWT + jti 黑名单</th><th>Session（Redis 存）</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>验证方式</strong></td>
+            <td class="win">本地 HMAC 验签，无网络往返</td>
+            <td>查 Redis / DB</td>
+          </tr>
+          <tr>
+            <td><strong>水平扩展</strong></td>
+            <td class="win">无状态，任意网关实例都能验</td>
+            <td>需 sticky session 或共享存储</td>
+          </tr>
+          <tr>
+            <td><strong>撤销</strong></td>
+            <td class="lose">需要 jti 黑名单（Redis）</td>
+            <td class="win">直接删 Session 即可</td>
+          </tr>
+          <tr>
+            <td><strong>大小</strong></td>
+            <td>1-2KB（含 payload）</td>
+            <td class="win">仅一个 sid cookie</td>
+          </tr>
+          <tr>
+            <td><strong>过期</strong></td>
+            <td>自带 exp，到期自动失效</td>
+            <td>需服务端定时清理</td>
+          </tr>
+          <tr>
+            <td><strong>跨域</strong></td>
+            <td class="win">Bearer 头，跨域友好</td>
+            <td>需 cookie + CORS</td>
+          </tr>
+          <tr>
+            <td><strong>移动端 / API</strong></td>
+            <td class="win">天然适合</td>
+            <td>不适合</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="procon">
+        <div class="pros">
+          <h4>JWT + jti 黑名单的好处 <span class="badge">Pros</span></h4>
+          <ul>
+            <li><strong>无状态验签：</strong>HMAC 本地验，无 Redis 往返，p99 低。</li>
+            <li><strong>水平扩展友好：</strong>多实例网关都能验，不需要共享 Session。</li>
+            <li><strong>自带过期：</strong>exp 字段到期自动失效，无需服务端清理。</li>
+            <li><strong>API Key 互补：</strong>对外服务用 API Key，对内用户用 JWT。</li>
+            <li><strong>跨域友好：</strong>Bearer 头，无 cookie + CORS 问题。</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>JWT + jti 黑名单的代价 <span class="badge">Cons</span></h4>
+          <ul>
+            <li><strong>撤销难：</strong>JWT 一旦签发无法回收，需 Redis 维护 jti 黑名单。</li>
+            <li><strong>体积大：</strong>含 payload，HTTP 头开销比 Session cookie 大。</li>
+            <li><strong>密钥泄漏风险：</strong>HMAC 密钥泄漏则所有 token 伪造，需轮换机制。</li>
+            <li><strong>alg:none 攻击：</strong>必须强制 SigningMethodHMAC，本实现已防。</li>
+            <li><strong>无法中途改权限：</strong>role 在 payload 中签发后不可改，需配合短期 token + refresh。</li>
+            <li><strong>黑名单查询每次 Redis：</strong>性能依赖 Redis RTT。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">JWT 的优化方向</span>
+        (1) <strong>短期 access + 长期 refresh：</strong>access 15min，refresh 7d，refresh 时重查权限，<em>实现动态权限</em>。<br>
+        (2) <strong>密钥轮换：</strong>KID 头标识密钥版本，定期轮换。<br>
+        (3) <strong>非对称 RS256：</strong>私钥签发，公钥验签，<em>网关只持公钥</em>，签发服务隔离。<br>
+        (4) <strong>本地 jti 缓存：</strong>最近吊销的 jti 用进程内 LRU 兜底，减少 Redis 查询。<br>
+        (5) <strong>Token 内嵌最小权限：</strong>仅放 user_id + role，详细信息查 Auth 服务。
+      </div>
+
+      <h3>3. Redis Lua 令牌桶 vs 滑动窗口 · 限流策略选型</h3>
+      <p>
+        网关用 Redis + Lua 脚本实现令牌桶 <code>burst=100, sustained=10/s</code>，对比滑动窗口与漏桶。
+      </p>
+
+      <table class="compare">
+        <thead>
+          <tr><th>策略</th><th>突发流量</th><th>实现复杂度</th><th>分布式友好</th><th>适用场景</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>令牌桶</strong>（本实现）</td>
+            <td class="win">允许突发（桶里有积压令牌）</td>
+            <td>中 · Redis Lua</td>
+            <td class="win">天然支持</td>
+            <td>API 限流</td>
+          </tr>
+          <tr>
+            <td>漏桶（Leaky Bucket）</td>
+            <td class="lose">严格匀速，不突发</td>
+            <td>中</td>
+            <td class="win">支持</td>
+            <td>流量整形 / MQ 入队</td>
+          </tr>
+          <tr>
+            <td>滑动窗口</td>
+            <td>中</td>
+            <td class="lose">高 · 需 sorted set</td>
+            <td class="win">支持</td>
+            <td>精确限流</td>
+          </tr>
+          <tr>
+            <td>固定窗口</td>
+            <td class="lose">边界突刺</td>
+            <td class="win">低 · 一计数器</td>
+            <td class="win">支持</td>
+            <td>简单粗略</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="procon">
+        <div class="pros">
+          <h4>选 Redis Lua 令牌桶的好处 <span class="badge">Pros</span></h4>
+          <ul>
+            <li><strong>原子性：</strong>Lua 脚本在 Redis 单线程内原子执行，无锁竞争。</li>
+            <li><strong>突发友好：</strong>桶里有积压令牌，瞬间高并发能放过，符合 API 网关场景。</li>
+            <li><strong>分布式一致：</strong>多网关实例共享 Redis，全局一致限流。</li>
+            <li><strong>低延迟：</strong>Redis 单次 RTT，<1ms。</li>
+            <li><strong>降级清晰：</strong>Redis 挂 → 放行（业务优先于限流）。</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>选 Redis Lua 令牌桶的代价 <span class="badge">Cons</span></h4>
+          <ul>
+            <li><strong>Redis 单点：</strong>Redis 抖动期间限流失效。</li>
+            <li><strong>用户级限流难：</strong>当前按 IP，需扩展到 user_id 维度，hash tag 拓展。</li>
+            <li><strong>无公平调度：</strong>同一 IP 多用户互相挤压。</li>
+            <li><strong>无多维度组合：</strong>不能按 user + path + method 灵活组合。</li>
+            <li><strong>Lua 脚本维护：</strong>升级需 EVALSHA + 兼容版本。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">限流的优化方向</span>
+        (1) <strong>多维度：</strong>user_id + path + method 组合 key，精细限流。<br>
+        (2) <strong>本地兜底：</strong>golang.org/x/time/rate 进程内 token bucket，Redis 故障时本地兜底。<br>
+        (3) <strong>分层限流：</strong>网关层粗限（IP），服务层细限（user + path），双层防护。<br>
+        (4) <strong>熔断器：</strong>失败率超阈值 → 暂停该 user/path 转发，半开探测恢复。<br>
+        (5) <strong>Adaptive Limiter：</strong>基于后端 RTT / CPU 自适应调限流阈值，Netflix style。<br>
+        (6) <strong>Redis Cluster：</strong>把限流 key hash 分片，避免单 Redis 瓶颈。
+      </div>
+
+      <h3>4. 洋葱中间件 vs Filter Chain · 为什么选洋葱</h3>
+      <p>
+        Gin 用洋葱模型（<code>c.Next()</code> 递归 + defer 倒序回弹），对比 Java Filter Chain 与 Spring Interceptor。
+      </p>
+
+      <div class="procon">
+        <div class="pros">
+          <h4>洋葱中间件的好处 <span class="badge">Pros</span></h4>
+          <ul>
+            <li><strong>before/after 对称：</strong>同一中间件可同时写 before 与 after 逻辑，无需分离。</li>
+            <li><strong>同 goroutine：</strong>全程一个 goroutine，RequestID 等上下文天然传递。</li>
+            <li><strong>异常传播正常：</strong>panic 由内层抛，外层 defer recover 接。</li>
+            <li><strong>实现简单：</strong>gin 中间件即 <code>func(c *gin.Context)</code>，~10 行模板。</li>
+            <li><strong>顺序直观：</strong>注册顺序即包裹顺序，看 main 就懂。</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>洋葱中间件的代价 <span class="badge">Cons</span></h4>
+          <ul>
+            <li><strong>goroutine 栈占用：</strong>每嵌套层增加栈深度。</li>
+            <li><strong>无法并行：</strong>所有中间件串行，无法并行加速（一般也不需要）。</li>
+            <li><strong>调试难：</strong>panic 栈深，不易看出哪层挂了。</li>
+            <li><strong>不能跳过：</strong>中间件需显式 <code>c.Abort()</code>，否则继续。</li>
+            <li><strong>after 顺序易错：</strong>需理解 defer 机制。</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3>5. RBAC vs ACL · 权限模型选型</h3>
+      <p>
+        网关用 RBAC（基于角色），权限 <code>resource:action</code>，对比 ACL（直接 user-permission 映射）。
+      </p>
+
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>RBAC（本实现）</th><th>ACL</th><th>ABAC</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>授权单位</strong></td>
+            <td>角色（admin/writer/reader）</td>
+            <td>用户</td>
+            <td>属性（user/resource/env）</td>
+          </tr>
+          <tr>
+            <td><strong>管理成本</strong></td>
+            <td class="win">低 · 改角色即改全部用户</td>
+            <td class="lose">高 · 每用户单独授权</td>
+            <td>中</td>
+          </tr>
+          <tr>
+            <td><strong>细粒度</strong></td>
+            <td>中 · 角色级</td>
+            <td class="win">高 · 用户级</td>
+            <td class="win">极高 · 属性级</td>
+          </tr>
+          <tr>
+            <td><strong>性能</strong></td>
+            <td class="win">查表 O(1)</td>
+            <td class="win">查表 O(1)</td>
+            <td class="lose">需规则引擎</td>
+          </tr>
+          <tr>
+            <td><strong>典型场景</strong></td>
+            <td>企业应用</td>
+            <td>文件系统</td>
+            <td>合规审计</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="procon">
+        <div class="pros">
+          <h4>选 RBAC 的好处 <span class="badge">Pros</span></h4>
+          <ul>
+            <li><strong>角色管理简单：</strong>3 角色 × 9 权限，一张表搞定。</li>
+            <li><strong>用户变动友好：</strong>用户升职换角色即可，无需逐权限改。</li>
+            <li><strong>性能好：</strong>角色查表 O(1)，无复杂规则。</li>
+            <li><strong>可读性高：</strong><code>required = "kv:put"</code> 一眼看懂。</li>
+            <li><strong>符合企业实践：</strong>大多数业务系统都用 RBAC。</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>选 RBAC 的代价 <span class="badge">Cons</span></h4>
+          <ul>
+            <li><strong>角色爆炸：</strong>复杂业务可能衍生几十种角色，难管理。</li>
+            <li><strong>无细粒度：</strong>无法限制「user A 只能写 collection X」。</li>
+            <li><strong>动态权限难：</strong>JWT role 一旦签发不可改，需 refresh。</li>
+            <li><strong>无多租户：</strong>当前无 tenant 维度。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">RBAC 的优化方向</span>
+        (1) <strong>RBAC + 数据范围：</strong>增加 <code>scope</code> 维度，限制 user 可访问的 collection。<br>
+        (2) <strong>多租户：</strong>JWT 加 tenant_id，权限矩阵分租户。<br>
+        (3) <strong>动态权限：</strong>token 短期 + refresh 时查 Auth 服务最新权限。<br>
+        (4) <strong>ABAC 扩展：</strong>对合规场景加属性规则引擎（OPA / Cedar）。<br>
+        (5) <strong>权限缓存：</strong>网关缓存 user-permission 短期 TTL，减少 Auth 服务压力。
+      </div>
+
+      <h3>6. 整体取舍 · Gin 网关 vs Kong vs APISIX</h3>
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>Gin 网关（本实现）</th><th>Kong</th><th>APISIX</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>语言</strong></td>
+            <td>Go + Gin</td>
+            <td>Lua + nginx</td>
+            <td>Lua + nginx</td>
+          </tr>
+          <tr>
+            <td><strong>中间件</strong></td>
+            <td>洋葱模型 6 件套</td>
+            <td class="win">200+ 插件</td>
+            <td class="win">100+ 插件</td>
+          </tr>
+          <tr>
+            <td><strong>服务发现</strong></td>
+            <td class="lose">环境变量</td>
+            <td class="win">etcd / consul</td>
+            <td class="win">etcd</td>
+          </tr>
+          <tr>
+            <td><strong>动态路由</strong></td>
+            <td class="lose">重启改 yaml</td>
+            <td class="win">Admin API 热更新</td>
+            <td class="win">Admin API 热更新</td>
+          </tr>
+          <tr>
+            <td><strong>性能</strong></td>
+            <td>5-10k QPS</td>
+            <td class="win">50k+</td>
+            <td class="win">50k+</td>
+          </tr>
+          <tr>
+            <td><strong>定位</strong></td>
+            <td>教学项目</td>
+            <td>API Gateway 产品</td>
+            <td>云原生 API Gateway</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        <span class="ctitle">整体结论 · 为什么选 Go + Gin 自研网关</span>
+        目标场景是「<em>面试项目 + 中间件实践 + 业务编排</em>」：
+        <ul style="margin-top:6px">
+          <li><strong>洋葱模型清晰：</strong>能讲清中间件执行顺序，是 Go 后端面试经典题。</li>
+          <li><strong>JWT + RBAC + Redis：</strong>覆盖主流后端认证体系。</li>
+          <li><strong>降级哲学：</strong>Redis 故障不阻断业务，体现工程思维。</li>
+          <li><strong>实现可控：</strong>~1500 行 Go 代码完成完整网关，复杂度合适。</li>
+        </ul>
+        <strong>代价</strong>是无动态路由 / 无服务发现 / 性能不如 nginx 系——这些是用「自研教学 + Go 易读」换来的取舍。
+      </div>
+
+      <h3>7. 设计原则总结</h3>
+      <div class="scenario-grid">
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">原则 1</span><span class="stitle">洋葱 before/after 对称</span></div>
+          <p class="sbody">同一中间件同时处理请求前后逻辑，逻辑集中可读。</p>
+        </div>
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">原则 2</span><span class="stitle">JWT 自验证 + Redis 降级</span></div>
+          <p class="sbody">HMAC 本地验签无网络往返，Redis 抖动不阻断业务。</p>
+        </div>
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">原则 3</span><span class="stitle">Recover 兜底 panic</span></div>
+          <p class="sbody">所有 panic 由 Recover 接住，进程不崩，单请求 500 不影响其他。</p>
+        </div>
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">原则 4</span><span class="stitle">幂等才重试</span></div>
+          <p class="sbody">GET 自动重试，写操作不重试，避免重复写入。</p>
+        </div>
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">原则 5</span><span class="stitle">身份透传头</span></div>
+          <p class="sbody">网关解 JWT 后注入 X-User-ID / X-Role 给后端，后端无需再解。</p>
+        </div>
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">原则 6</span><span class="stitle">优雅停机</span></div>
+          <p class="sbody">SIGTERM → 拒新连接 → 等已有处理完，无中断退出。</p>
+        </div>
+        <div class="scenario danger">
+          <div class="shead"><span class="snum">原则 7</span><span class="stitle">RequestID 贯穿</span></div>
+          <p class="sbody">全链路同一 ID，串联日志与追踪，故障排查必需。</p>
+        </div>
+        <div class="scenario danger">
+          <div class="shead"><span class="snum">原则 8</span><span class="stitle">降级哲学</span></div>
+          <p class="sbody">Redis 故障时宁可放过不可错杀，业务优先于限流与安全。</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">Gin 网关实现边界（如实告知）</span>
+        本实现是教学级网关，相比 Kong / APISIX 仍有差距：<br>
+        (1) 无动态路由（改路由需重启）；<br>
+        (2) 无服务发现（仅环境变量）；<br>
+        (3) 无完整熔断器（只有上游失败 502）；<br>
+        (4) 无可观测性内置（access_log / metrics / tracing 都需另加）；<br>
+        (5) 无多租户 / 数据范围控制；<br>
+        (6) 限流仅按 IP，无 user/path 维度组合。<br>
+        这些都是<em>教学版与产品级网关的关键差距</em>，也是本页面设计分析的优化方向所在。
+      </div>
+    </section>
 
   </main>
 </div>

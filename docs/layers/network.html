@@ -56,28 +56,74 @@
       </div>
     </div>
 
-    <h2>整体架构</h2>
-    <p>Skynet 分四块：<code>net</code> 协程化网络底座、<code>core</code> 协程调度、<code>http</code> 协议解析、<code>proxy</code> 网关代理。外加一个 <code>gateway/</code> 网关配置示例。</p>
+    <figure class="layer-banner">
+      <img alt="Skynet C++20 协程网络库概念图" src="https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=Minimalist%20editorial%20illustration%20of%20a%20C%2B%2B%20coroutine%20network%20library%20warm%20cream%20beige%20background%20deep%20navy%20blue%20epoll%20event%20loop%20with%20flowing%20data%20streams%20through%20multiple%20layered%20modules%20connected%20by%20curved%20arrows%20clean%20geometric%20blocks%20soft%20slate%20gray%20accents%20soft%20ambient%20lighting%20elegant%20flat%20design%20no%20text%20no%20words%20no%20letters&image_size=landscape_16_9" />
+    </figure>
 
-    <div class="arch-diagram">┌──────────────────────────────────────────────────────────┐
-│  gateway/  (skynet_gateway, 对外 :8080)                  │
-│   gateway.yaml 配置 → 反向代理到 Gin :18080             │
-└───────────────────────────┬──────────────────────────────┘
-                            │ 使用
-        ┌───────────────────┼───────────────────────┐
-        ▼                   ▼                       ▼
-  ┌──────────┐         ┌──────────┐           ┌──────────────┐
-  │  http/   │         │  proxy/  │           │    net/      │
-  │ 解析+路由│         │ LB+池+HC │           │ acceptor+IO  │
-  └────┬─────┘         └────┬─────┘           └──────┬───────┘
-       │ co_await            │ select()             │ watchOnce
-       └─────────────┬──────┴────────────────────────┘
-                     ▼
-              ┌─────────────┐
-              │   core/     │   协程调度三路复用
-              │ executor    │   epoll + ready queue + TimerWheel
-              │ task        │   promise_type 生命周期
-              └─────────────┘</div>
+    <h2>请求处理竖向流程</h2>
+    <p>Skynet 的核心是「<em>主 Reactor accept → Sub Reactor co_await IO → HTTP 解析 → LB 选上游 → 反代</em>」。
+      下面的竖向流程把每个阶段的关键动作与崩溃点串联起来，每一步都标注归属模块。</p>
+
+    <div class="vflow">
+      <div class="vstep"><div class="vnode">1</div><div class="vbody">
+        <p class="vtitle">Main Reactor · accept <span class="vtag safe">net/</span></p>
+        <p class="vdesc">主线程 <code>IOContext::poll</code> 阻塞等 listen fd，新连接 <code>accept4</code> 拿到 cfd。</p>
+        <p class="vdetail"><strong>关键：</strong>用 <code>SO_REUSEPORT</code> 多进程可同时 accept；本实现单进程多线程 round-robin 派发到 Sub。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">2</div><div class="vbody">
+        <p class="vtitle">派发到 Sub Reactor <span class="vtag safe">net/</span></p>
+        <p class="vdesc">cfd 按 round-robin 分给某个 Sub 的 <code>IOContext</code>，<code>EPOLLIN | EPOLLET | EPOLLRDHUP</code> 注册。</p>
+        <p class="vdetail"><strong>崩溃点 A：</strong>派发前进程崩 → 连接丢失，客户端 ETIMEDOUT 重连；服务端无状态可恢复。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">3</div><div class="vbody">
+        <p class="vtitle">co_await readExact / readUntil <span class="vtag safe">net/socket.h</span></p>
+        <p class="vdesc">Sub 协程在 <code>asyncRead</code> 上挂起，<code>watchOnce</code> 注册一次性监听；ET 模式必须一次读完到 <code>EAGAIN</code>。</p>
+        <p class="vdetail"><strong>为什么 ET：</strong>避免每次事件都触发，减少 syscall；代价是要循环读 <code>EAGAIN</code> 才能停。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">4</div><div class="vbody">
+        <p class="vtitle">HTTP 增量解析 <span class="vtag safe">http/parser.h</span></p>
+        <p class="vdesc">每段数据喂给状态机 <code>METHOD→PATH→VERSION→HEADER→BODY→DONE</code>，半包先缓存，下次拼接再喂。</p>
+        <p class="vdetail"><strong>崩溃点 B：</strong>解析一半进程崩 → 客户端连接断开；服务端无任何持久化负担。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">5</div><div class="vbody">
+        <p class="vtitle">Router 路由匹配 <span class="vtag safe">http/router.h</span></p>
+        <p class="vdesc">路径参数提取（<code>/api/:svc/:act</code>），决定后续 handler。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">6</div><div class="vbody">
+        <p class="vtitle">LoadBalancer.select() <span class="vtag safe">proxy/load_balancer.h</span></p>
+        <p class="vdesc">读完 HTTP 后才选上游（不是 accept 时选），用 WRR/LeastConn/ConsistentHash 取 Upstream。</p>
+        <p class="vdetail"><strong>关键：</strong>延迟到完整请求后选上游，可基于 <code>X-Hash-Key</code> 头做一致性哈希。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">7</div><div class="vbody">
+        <p class="vtitle">ConnectionPool::get <span class="vtag safe">proxy/connection_pool.h</span></p>
+        <p class="vdesc">复用到后端的 TCP 连接，避免每次握手；连接耗尽则新建（受池上限约束）。</p>
+        <p class="vdetail"><strong>HealthCheck</strong>：后台线程周期探活，失败 Upstream 标降级不参与 LB。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">8</div><div class="vbody">
+        <p class="vtitle">co_await 转发请求 + SSE 流式回包 <span class="vtag safe">proxy/middleware.h</span></p>
+        <p class="vdesc">把 HTTP 透传到后端 Gin，<code>Transfer-Encoding: chunked</code> 或 SSE <code>text/event-stream</code> 边收边吐。</p>
+        <p class="vdetail"><strong>崩溃点 C：</strong>上游已收部分响应后崩 → 客户端看到截断响应；本实现无重试 chunked，仅对幂等 GET 自动重试。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode alt">9</div><div class="vbody">
+        <p class="vtitle">release 连接 + feedback LB <span class="vtag safe">proxy/</span></p>
+        <p class="vdesc">成功/失败上报给 LB，用于熔断与降级决策；连接还池（若 keep-alive）或关闭。</p>
+      </div></div>
+    </div>
+
+    <div class="callout">
+      <span class="ctitle">为什么 skynet 不做 JWT / 限流？</span>
+      职责分离：skynet 是「<em>接入层 + 转发层</em>」，只关心 IO；JWT 验签、限流、RBAC 都在 Gin 网关做。
+      <strong>好处：</strong>skynet C++ 协程不背业务负担，性能上限只受 IO 限制；Gin 用 Go 写业务易迭代。
+      <strong>缺点：</strong>两跳网络，多一次 RTT；可通过同机部署 skynet ↔ Gin 用 UDS 减少 RTT。
+    </div>
 
     <h2>核心组件知识点</h2>
 
@@ -286,6 +332,541 @@ ctest --test-dir build --output-on-failure</code></pre>
         <tr><td>LB 时机</td><td>读完完整 HTTP 后 select()</td><td>非 accept 时选上游</td></tr>
       </tbody>
     </table>
+
+    <section class="analysis" id="analysis">
+      <h2>设计深度分析</h2>
+      <p class="lead">
+        下面把 Skynet 的设计决策拆成四类：<strong>崩溃恢复</strong>（接入层崩溃 vs 上游崩溃 vs 协程崩溃）、
+        <strong>核心技术选型</strong>（epoll ET vs LT、协程 vs 回调、watchOnce 一次性监听）、
+        <strong>负载均衡策略对比</strong>（RR/WRR/LeastConn/ConsistentHash）、<strong>整体取舍与优化方向</strong>。
+      </p>
+
+      <h3>1. 崩溃恢复 · 六种场景</h3>
+      <p>
+        接入层的本质是「<em>无状态转发层</em>」：所有持久化在 Gin 后端，skynet 不持有任何业务状态（除了连接池与 LB 表）。
+        这决定了 skynet 的崩溃恢复语义与存储引擎完全不同：<strong>丢失当前连接是可接受的，重复 / 半截响应是不可接受的</strong>。
+      </p>
+
+      <div class="scenario-grid">
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">CASE 1</span><span class="stitle">崩溃点 A · accept 后未派发</span></div>
+          <p class="sbody">
+            Main Reactor 已 <code>accept4</code> 拿到 cfd，但还没派发到 Sub 就崩。客户端 SYN/ACK 已完成，会一直等数据 → ETIMEDOUT。
+          </p>
+          <p class="sbody">
+            <strong>为什么这么设计：</strong>接入层无 ack 队列，accept 到派发是原子的两步；中间崩溃必然丢失。
+            <strong>恢复：</strong>客户端重连，supervisor 重启 skynet。
+          </p>
+          <span class="sresult bad">恢复语义：连接丢失 · 客户端需重连</span>
+        </div>
+
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">CASE 2</span><span class="stitle">崩溃点 B · HTTP 解析一半</span></div>
+          <p class="sbody">
+            Sub 已读到部分 HTTP 头，状态机停在 HEADER 阶段就崩。客户端连接断开；服务端协程帧被 Task 析构清理。
+          </p>
+          <p class="sbody">
+            <strong>为什么这么设计：</strong>解析器是<em>无状态字段</em>（每次新协程新 parser），崩溃后无需恢复内存状态。
+            <strong>好处：</strong>无 GC 负担，无 WAL，无回放。
+          </p>
+          <span class="sresult ok">恢复语义：连接断开 · 无残留</span>
+        </div>
+
+        <div class="scenario danger">
+          <div class="shead"><span class="snum">CASE 3</span><span class="stitle">崩溃点 C · 上游已响应一半</span></div>
+          <p class="sbody">
+            skynet 已经把请求转给 Gin，Gin 返回了 HTTP 头与部分 body，skynet 协程正 co_await 转发时崩。
+            客户端看到截断响应（可能 200 OK + 半截 body），需要业务层检测 Content-Length 不符。
+          </p>
+          <p class="sbody">
+            <strong>当前实现：</strong>无 chunked 重试，仅对幂等 GET 自动换 Upstream 重试；POST/写操作<em>不重试</em>避免重复写入。
+            <strong>优化方向：</strong>对非幂等操作用 idempotency-key 头，让上游去重。
+          </p>
+          <span class="sresult bad">恢复语义：客户端看到截断 · 需重试</span>
+        </div>
+
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">CASE 4</span><span class="stitle">协程泄漏 · await 永不返回</span></div>
+          <p class="sbody">
+            Sub 协程 <code>co_await asyncRead</code> 永久挂起（上游不发数据也不 close），协程帧泄漏。
+          </p>
+          <p class="sbody">
+            <strong>为什么这么设计：</strong>Executor 有 <code>TimerWheel</code> + <code>co_await timeout</code>，配合 <code>shutdown_write_timeout</code> 强制关连接；<em>不依赖业务协程主动检测</em>。
+          </p>
+          <span class="sresult ok">恢复语义：超时强杀 · 协程帧释放</span>
+        </div>
+
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">CASE 5</span><span class="stitle">连接池中的连接断开</span></div>
+          <p class="sbody">
+            复用的 TCP 连接已 FIN（上游重启或 RST），但 skynet 池里还留着这个 entry。下次 get() 拿到死连接 → 写失败。
+          </p>
+          <p class="sbody">
+            <strong>当前实现：</strong>连接池每次 get 检查 <code>recv(MSG_PEEK)</code> 是否读到 EOF/RST，死连接直接丢弃重建。
+            <strong>缺点：</strong>每次 get 多一次 syscall；<strong>优化：</strong>RST 探测改为基于 epoll 事件的「写失败即丢弃」。
+          </p>
+          <span class="sresult ok">恢复语义：自动重建 · 业务无感</span>
+        </div>
+
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">CASE 6</span><span class="stitle">skynet 重启 · 滚动升级</span></div>
+          <p class="sbody">
+            supervisor 重启 skynet 进程，listen fd 重新创建，老连接全部断开。客户端按 ETIMEDOUT 重连。
+          </p>
+          <p class="sbody">
+            <strong>好处：</strong>无状态重启快（毫秒级），不像存储引擎要恢复 MemTable；<strong>缺点：</strong>有损——长连接被中断。
+            <strong>优化方向：</strong>用 <code>SO_REUSEPORT</code> + 多进程，逐进程重启实现 zero-downtime；或用 fd passing 把 listen fd 传给新进程。
+          </p>
+          <span class="sresult bad">恢复语义：快速但中断长连接</span>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">接入层崩溃恢复的统一原则</span>
+        <em>状态都在上游</em> → skynet 崩溃只要快速重启即可，不需要 WAL、不需要快照、不需要 sync。
+        <strong>代价</strong>是当前活跃连接全部丢失，但客户端重试成本低（毫秒级）。这是「<em>无状态层换简单恢复</em>」的典型设计。
+      </div>
+
+      <h3>2. epoll ET vs LT · 为什么选 ET</h3>
+      <p>
+        Skynet 用 <code>EPOLLET</code>（边缘触发），与 muduo（LT）/ libco（LT+hook）形成对比。
+      </p>
+
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>ET（边缘触发）</th><th>LT（水平触发）</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>触发语义</strong></td>
+            <td>状态变化才通知（fd 从无数据→有数据）</td>
+            <td>只要 fd 有数据就一直通知</td>
+          </tr>
+          <tr>
+            <td><strong>Syscall 次数</strong></td>
+            <td class="win">每事件一次 epoll_wait + 一次循环读</td>
+            <td>多次 epoll_wait 持续通知</td>
+          </tr>
+          <tr>
+            <td><strong>读循环要求</strong></td>
+            <td class="lose">必须读到 EAGAIN，否则数据滞留</td>
+            <td class="win">读多少都行，下次还会通知</td>
+          </tr>
+          <tr>
+            <td><strong>编程心智</strong></td>
+            <td class="lose">高 · 容易写错</td>
+            <td class="win">低 · 自然</td>
+          </tr>
+          <tr>
+            <td><strong>与协程契合度</strong></td>
+            <td class="win">高 · 协程 await EAGAIN 切回 Executor</td>
+            <td>中 · 回调式才方便</td>
+          </tr>
+          <tr>
+            <td><strong>thundering herd</strong></td>
+            <td class="win">多线程 accept 不惊群（仅通知一次）</td>
+            <td class="lose">多线程 accept 惊群</td>
+          </tr>
+          <tr>
+            <td><strong>行业先例</strong></td>
+            <td class="win">nginx / brpc / skynet</td>
+            <td>muduo / libco / golang netpoll（其实是 ET）</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="procon">
+        <div class="pros">
+          <h4>选 ET 的好处 <span class="badge">Pros</span></h4>
+          <ul>
+            <li><strong>减少 syscall：</strong>每次事件触发后必须循环读到 EAGAIN，避免 LT 下重复 epoll_wait。</li>
+            <li><strong>无惊群：</strong>多线程同时 accept 同一 listen fd，ET 只通知一次，避免惊群。</li>
+            <li><strong>与协程天然契合：</strong>协程 await 读 → EAGAIN → 切回 Executor → 等下次事件，逻辑线性。</li>
+            <li><strong>对延迟敏感场景友好：</strong>事件触发立即处理，无 LT 的「重复触发 → 浪费 CPU」。</li>
+            <li><strong>nginx/brpc 行业验证：</strong>大规模生产实践稳定。</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>选 ET 的代价 <span class="badge">Cons</span></h4>
+          <ul>
+            <li><strong>必须读完到 EAGAIN：</strong>否则下次数据来了也不通知，连接「假死」。</li>
+            <li><strong>容易写错：</strong>漏写 read loop 或误 break 导致数据滞留，bug 极难调试。</li>
+            <li><strong>边界处理复杂：</strong>写缓冲区满时 EPOLLOUT 要切到「写监听」模式。</li>
+            <li><strong>对短连接不友好：</strong>频繁增删 fd，回调表查找开销大。</li>
+            <li><strong>调试工具少：</strong>strace / lsof 看不出 ET 与 LT 区别，要靠源码审查。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">为什么 muduo 用 LT？</span>
+        muduo 作者陈硕在《Linux 多线程服务端编程》中明确说 LT 更不易出错。这是<em>工程优先</em>的选择。
+        但 skynet 选 ET 的原因：(1) 与 C++20 协程结合更好（await EAGAIN → 切走）；(2) 学习项目追求性能上限；
+        (3) <code>watchOnce</code> 用「一次性监听」绕开 ET 的复杂性——读完立即从 epoll 移除，下次需要再 re-arm，避免竞态。
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">watchOnce · skynet 的关键工程巧思</span>
+        ET 模式最大的坑是「<em>读到一半 fd 还有数据没读完，但已经触发过事件了</em>」。
+        skynet 用 <code>watchOnce</code> 把每次 read 都变成一次性监听：触发即从 epoll 移除 fd → 协程 read 循环 → 不够再 re-arm。
+        <strong>好处：</strong>无竞态（不会因为 re-arm 时机错过事件）；<strong>缺点：</strong>每次 re-arm 多一次 <code>epoll_ctl</code> syscall。
+        <strong>优化方向：</strong>对长连接批量预读 + 缓冲区，减少 re-arm 次数。
+      </div>
+
+      <h3>3. C++20 协程 vs 回调 vs 线程</h3>
+      <p>
+        skynet 用 C++20 协程（<code>Task&lt;T&gt; + promise_type + co_await</code>），对比 muduo 回调与 minikv_server 的线程池。
+      </p>
+
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>C++20 协程（skynet）</th><th>回调（muduo）</th><th>线程池（minikv_server）</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>并发单位</strong></td>
+            <td>协程帧（~200B）</td>
+            <td>闭包（堆分配）</td>
+            <td>线程栈（默认 8MB）</td>
+          </tr>
+          <tr>
+            <td><strong>切换成本</strong></td>
+            <td class="win">~10ns（无内核态）</td>
+            <td class="win">0（直接调用）</td>
+            <td class="lose">~1μs（内核态）</td>
+          </tr>
+          <tr>
+            <td><strong>代码可读性</strong></td>
+            <td class="win">高 · 顺序写</td>
+            <td class="lose">低 · callback hell</td>
+            <td class="win">高 · 顺序写</td>
+          </tr>
+          <tr>
+            <td><strong>栈大小</strong></td>
+            <td class="win">动态，按需扩</td>
+            <td>无栈</td>
+            <td class="lose">固定 8MB</td>
+          </tr>
+          <tr>
+            <td><strong>编译器支持</strong></td>
+            <td class="lose">需 C++20 + 较新 gcc</td>
+            <td class="win">C++11 即可</td>
+            <td class="win">C++98 即可</td>
+          </tr>
+          <tr>
+            <td><strong>调试</strong></td>
+            <td class="lose">协程帧符号链不直观</td>
+            <td class="win">栈正常</td>
+            <td class="win">栈正常</td>
+          </tr>
+          <tr>
+            <td><strong>百万连接</strong></td>
+            <td class="win">可以（每协程 ~200B → 200MB）</td>
+            <td class="win">可以（无栈）</td>
+            <td class="lose">不行（8MB × 100万 = 8TB）</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="procon">
+        <div class="pros">
+          <h4>选 C++20 协程的好处 <span class="badge">Pros</span></h4>
+          <ul>
+            <li><strong>代码顺序写：</strong>co_await 读 → 解析 → 转发，逻辑像同步代码，可读性高。</li>
+            <li><strong>无栈开销小：</strong>每个协程帧 ~200B，可轻松百万并发。</li>
+            <li><strong>切换无内核态：</strong>promise_type 对称转移，~10ns。</li>
+            <li><strong>与 ET epoll 契合：</strong>await EAGAIN 自动让出，无需手动 yield。</li>
+            <li><strong>异常传播正常：</strong>try-catch 跨 await 点正常工作，不像回调。</li>
+            <li><strong>是 C++ 现代化趋势：</strong>未来更多框架会迁移到协程。</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>选 C++20 协程的代价 <span class="badge">Cons</span></h4>
+          <ul>
+            <li><strong>编译器要求高：</strong>需 g++-12+，部分老系统不支持。</li>
+            <li><strong>调试复杂：</strong>协程帧在堆上，gdb 栈符号链不直观，需 -fcoroutines + cmake 支持。</li>
+            <li><strong>悬空引用风险：</strong>co_await 期间引用的局部变量已析构，需用 <code>Task&lt;T&gt;</code> 值语义或智能指针。</li>
+            <li><strong>无成熟生态：</strong>不像 boost.asio/folly 那种 battle-tested。</li>
+            <li><strong>ABI 不稳定：</strong>不同编译器协程帧布局不同。</li>
+            <li><strong>实现量略大：</strong>promise_type 接口细节多。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">协程的优化方向</span>
+        (1) <strong>对称协程 vs 非对称协程：</strong>当前是 stackless 非对称，可考虑 boost.context 的 symmetric 协程，调度更灵活。<br>
+        (2) <strong>协程池 + 帧复用：</strong>预先分配 N 个协程帧池，避免每次 new。<br>
+        (3) <strong>work-stealing 调度：</strong>多线程时各线程偷协程，提高负载均衡。<br>
+        (4) <strong>io_uring 替换 epoll：</strong>Linux 5.x 内核的 io_uring 单次 syscall 批量提交 IO，吞吐 ×2-3。<br>
+        (5) <strong>共享栈协程：</strong>libco 风格，多个协程共用一个大栈，省内存（但有切栈开销）。
+      </div>
+
+      <h3>4. 负载均衡 · 四种策略对比</h3>
+      <p>
+        skynet 同时实现四种 LB：RR / WRR / LeastConn / ConsistentHash，每种适用场景不同。
+      </p>
+
+      <table class="compare">
+        <thead>
+          <tr><th>策略</th><th>实现复杂度</th><th>状态依赖</th><th>session 粘性</th><th>适用场景</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>RoundRobin</strong></td>
+            <td class="win">~20 行</td>
+            <td class="win">无（仅 idx_）</td>
+            <td class="lose">无</td>
+            <td>同质后端、轮询均衡</td>
+          </tr>
+          <tr>
+            <td><strong>WRR（平滑）</strong></td>
+            <td>~50 行</td>
+            <td>current_weights_</td>
+            <td class="lose">无</td>
+            <td>异质后端（CPU/内存不同）</td>
+          </tr>
+          <tr>
+            <td><strong>LeastConn</strong></td>
+            <td>~30 行</td>
+            <td>活跃连接计数</td>
+            <td class="lose">无</td>
+            <td>请求耗时差异大（长连接）</td>
+          </tr>
+          <tr>
+            <td><strong>ConsistentHash</strong></td>
+            <td class="lose">~150 行</td>
+            <td>hash ring + vnodes</td>
+            <td class="win">有（同 key 同后端）</td>
+            <td>缓存场景 / KV 分片</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="procon">
+        <div class="pros">
+          <h4>四策略并存的好处 <span class="badge">Pros</span></h4>
+          <ul>
+            <li><strong>灵活适配：</strong>不同 upstream 集群用不同 LB，配置驱动。</li>
+            <li><strong>面试加分项：</strong>能讲清四种策略的差异与权衡。</li>
+            <li><strong>WRR 用平滑算法：</strong>避免突刺，分布均匀。</li>
+            <li><strong>ConsistentHash 用 160 虚拟节点：</strong>数据分布均匀 + 单节点宕机影响小。</li>
+            <li><strong>feedback 接熔断：</strong>失败累计超阈值自动剔除上游。</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>四策略并存的代价 <span class="badge">Cons</span></h4>
+          <ul>
+            <li><strong>维护成本：</strong>4 套实现，bug 容易遗漏。</li>
+            <li><strong>LeastConn 状态难精确：</strong>跨线程共享活跃连接计数有锁竞争。</li>
+            <li><strong>ConsistentHash 不支持动态扩容好：</strong>加节点需重建 ring，旧映射全失效。</li>
+            <li><strong>无加权 LeastConn：</strong>异质集群无法用最少连接。</li>
+            <li><strong>无 P2C（Power of Two Choice）：</strong>大规模集群的随机采样策略。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">LB 的优化方向</span>
+        (1) <strong>P2C（Power of Two Choice）：</strong>随机选两个取活跃数少的，比 LeastConn 全局扫描快。<br>
+        (2) <strong>加权 LeastConn：</strong>LeastConn × WRR，异质集群更优。<br>
+        (3) <strong>动态权重 EWMA：</strong>根据延迟与成功率滚动平均调权，自适应故障。<br>
+        (4) <strong>Maglev 算法：</strong>Google 的 lookup-table 一致性哈希，O(1) 查找 + 重建快。<br>
+        (5) <strong>边界探测 + 主动剔除：</strong>基于 feedback 累计失败 + 半开探测，避免误杀。<br>
+        (6) <strong>热重启保 LB 状态：</strong>把 LB 内存序列化，重启后恢复，避免 cold start。
+      </div>
+
+      <h3>5. 主从 Reactor + 协程 vs 单 Reactor + 线程池</h3>
+      <p>
+        skynet 用 Main Reactor（accept）+ N 个 Sub Reactor（co_await IO），与 minikv_server 的「单 Reactor + 线程池」对比。
+      </p>
+
+      <div class="procon">
+        <div class="pros">
+          <h4>主从 Reactor + 协程的好处 <span class="badge">Pros</span></h4>
+          <ul>
+            <li><strong>分压：</strong>accept 不被 IO 阻塞，新连接接入不抖动。</li>
+            <li><strong>多核利用：</strong>Sub Reactor 各自 epoll，CPU 多核负载均衡。</li>
+            <li><strong>无锁连接派发：</strong>每个 Sub 独占自己 cfd 集，accept → round-robin 派发无锁。</li>
+            <li><strong>协程让 IO 不阻塞：</strong>每个 Sub 单线程 + 协程，IO 阻塞不浪费线程。</li>
+            <li><strong>对慢连接友好：</strong>慢客户端不拖累快客户端。</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>主从 Reactor + 协程的代价 <span class="badge">Cons</span></h4>
+          <ul>
+            <li><strong>派发不均：</strong>round-robin 派发可能让某 Sub 过载。</li>
+            <li><strong>跨 Sub 难迁移：</strong>cfd 在某 Sub epoll 中，要迁移需先 remove 再 add，开销大。</li>
+            <li><strong>协程帧在堆：</strong>高并发下堆分配压力大。</li>
+            <li><strong>无业务线程池解耦：</strong>慢业务（如 DB 查询）阻塞协程，必须配合 thread_pool 跑业务。</li>
+            <li><strong>调试复杂：</strong>N 个 Sub 线程，gdb 切换累。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">主从 Reactor 的优化方向</span>
+        (1) <strong>work-stealing 派发：</strong>各 Sub 队列长度上报，Main 优先派给短队列。<br>
+        (2) <strong>io_uring 多 Sub：</strong>每个 Sub 一个 io_uring 实例，syscall 摊销到批量提交。<br>
+        (3) <strong>SO_REUSEPORT 多 Main：</strong>多进程同时 accept，scale 到多 CPU。<br>
+        (4) <strong>动态 Sub 数：</strong>按连接数自动扩缩 Sub 线程。<br>
+        (5) <strong>异步 DNS 缓存：</strong>Resolver 协程化 + 进程内 DNS 缓存，避免每次反代都解析。
+      </div>
+
+      <h3>6. HTTP 解析 · 增量状态机 vs 全量解析</h3>
+      <p>
+        skynet 用「<em>增量状态机</em>」逐段喂给 parser，对比「<em>先收全包再一次性解析</em>」。
+      </p>
+
+      <div class="procon">
+        <div class="pros">
+          <h4>增量状态机的好处 <span class="badge">Pros</span></h4>
+          <ul>
+            <li><strong>无需缓冲整个请求：</strong>边收边解析，header 大可立即路由。</li>
+            <li><strong>提前拒绝：</strong>method/path 一解析完就能拒绝非法请求，不读完 body。</li>
+            <li><strong>支持 chunked + pipelining：</strong>多请求复用连接。</li>
+            <li><strong>内存友好：</strong>小 buffer 即可，避免大请求 OOM。</li>
+            <li><strong>与协程契合：</strong>await read → feed parser → await more。</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>增量状态机的代价 <span class="badge">Cons</span></h4>
+          <ul>
+            <li><strong>状态机实现复杂：</strong>边界条件多（header 跨包、CRLF 跨包）。</li>
+            <li><strong>调试难：</strong>需要单元测试覆盖所有跨包场景。</li>
+            <li><strong>慢攻击难防：</strong>慢速发送 header 会一直占用协程，需要 timeout 配合。</li>
+            <li><strong>chunked 边界：</strong>Transfer-Encoding: chunked 的边界解析易错。</li>
+            <li><strong>无压缩支持：</strong>HTTP/2 的 HPACK 头压缩不支持。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">HTTP 解析的优化方向</span>
+        (1) <strong>simd 解析：</strong>picohttpparser 用 SIMD 加速 CRLF 查找，吞吐 ×3。<br>
+        (2) <strong>HTTP/2 支持：</strong>HPACK 头压缩 + 多路复用。<br>
+        (3) <strong>慢速攻击防御：</strong>header timeout + max_header_bytes + max_body_bytes。<br>
+        (4) <strong>zero-copy：</strong>read 到 ringbuffer，parser 用 offset 而非 copy。<br>
+        (5) <strong>HTTP/3 over QUIC：</strong>基于 UDP，无队头阻塞，但需重构 IO 层。
+      </div>
+
+      <h3>7. 整体取舍 · skynet vs nginx vs envoy</h3>
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>skynet</th><th>nginx</th><th>envoy</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>语言</strong></td>
+            <td>C++20 协程</td>
+            <td>C + 回调</td>
+            <td>C++ + 协程</td>
+          </tr>
+          <tr>
+            <td><strong>并发模型</strong></td>
+            <td>多线程 Reactor + 协程</td>
+            <td>多进程 + 事件回调</td>
+            <td>多线程 + 协程</td>
+          </tr>
+          <tr>
+            <td><strong>HTTP 解析</strong></td>
+            <td>自研状态机</td>
+            <td class="win">SIMD 加速</td>
+            <td>HTTP/1+2+3</td>
+          </tr>
+          <tr>
+            <td><strong>负载均衡</strong></td>
+            <td>4 种</td>
+            <td>3 种（RR/IP/Hash）</td>
+            <td class="win">10+ 种 + xDS</td>
+          </tr>
+          <tr>
+            <td><strong>服务发现</strong></td>
+            <td class="lose">无（配置文件）</td>
+            <td class="lose">无</td>
+            <td class="win">xDS / SDS / EDS</td>
+          </tr>
+          <tr>
+            <td><strong>熔断 / 重试</strong></td>
+            <td>feedback + GET 重试</td>
+            <td>upstream_check</td>
+            <td class="win">完整熔断器 + 重试预算</td>
+          </tr>
+          <tr>
+            <td><strong>observability</strong></td>
+            <td class="lose">无内置</td>
+            <td>access_log</td>
+            <td class="win">全链路 tracing + metrics</td>
+          </tr>
+          <tr>
+            <td><strong>定位</strong></td>
+            <td>教学项目</td>
+            <td>Web 服务器 / 反代</td>
+            <td>Service Mesh Proxy</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        <span class="ctitle">整体结论 · 为什么 skynet 选 C++20 协程 + ET + 多 Reactor</span>
+        目标场景是「<em>面试项目 + 高并发接入层 + 易读代码</em>」：
+        <ul style="margin-top:6px">
+          <li><strong>C++20 协程：</strong>代码可读性接近同步，是 C++ 现代化趋势，面试加分。</li>
+          <li><strong>ET epoll：</strong>性能上限更高，与协程契合，行业先例多。</li>
+          <li><strong>多 Reactor：</strong>分压 + 多核利用，是接入层标配。</li>
+          <li><strong>四策略 LB：</strong>覆盖主流场景，配置驱动易扩展。</li>
+        </ul>
+        <strong>代价</strong>是生态未成熟、调试复杂、无 envoy 那种 service mesh 能力——这些是用「教学项目 + 简单」换来的取舍。
+      </div>
+
+      <h3>8. 设计原则总结</h3>
+      <div class="scenario-grid">
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">原则 1</span><span class="stitle">无状态</span></div>
+          <p class="sbody">接入层不持有业务状态，崩溃后立即重启可恢复，恢复简单。</p>
+        </div>
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">原则 2</span><span class="stitle">ET + 协程</span></div>
+          <p class="sbody">ET 减少 syscall，协程让代码线性可读，await EAGAIN 自动让出。</p>
+        </div>
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">原则 3</span><span class="stitle">watchOnce 避竞态</span></div>
+          <p class="sbody">一次性监听 + re-arm 绕开 ET 的复杂边界，简化心智。</p>
+        </div>
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">原则 4</span><span class="stitle">职责分离</span></div>
+          <p class="sbody">skynet 只做 IO，JWT/限流/RBAC 都在后端 Gin，C++ 不背业务负担。</p>
+        </div>
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">原则 5</span><span class="stitle">读完再选上游</span></div>
+          <p class="sbody">LB 在完整 HTTP 后选上游，支持基于 header 的一致性哈希。</p>
+        </div>
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">原则 6</span><span class="stitle">超时驱动一切</span></div>
+          <p class="sbody">TimerWheel 让协程不会永久挂起，避免协程泄漏。</p>
+        </div>
+        <div class="scenario danger">
+          <div class="shead"><span class="snum">原则 7</span><span class="stitle">幂等才重试</span></div>
+          <p class="sbody">GET 自动重试，POST/写操作不重试，避免重复写入。</p>
+        </div>
+        <div class="scenario danger">
+          <div class="shead"><span class="snum">原则 8</span><span class="stitle">接受丢连接换简单</span></div>
+          <p class="sbody">无状态重启有损，但成本低（ms 级）；不需要 WAL/snapshot/恢复。</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">skynet 实现边界（如实告知）</span>
+        本实现是教学级接入层，相比 nginx / envoy 仍有差距：<br>
+        (1) 无 HTTP/2 / HTTP/3 支持；<br>
+        (2) 无 service discovery（只能读 yaml 配置）；<br>
+        (3) 无完整熔断器（只有 feedback + HealthCheck，无半开探测）；<br>
+        (4) 无 observability（access_log / metrics / tracing 都需另加）；<br>
+        (5) 无 SIMD 加速的 HTTP 解析；<br>
+        (6) 无 io_uring 优化（仍是 epoll）。<br>
+        这些都是<em>教学版与生产版的差距</em>，也是本页面设计分析的优化方向所在。
+      </div>
+    </section>
 
   </main>
 </div>
