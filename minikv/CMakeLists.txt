@@ -44,6 +44,7 @@ add_library(minikv STATIC
     src/network/connection.cpp
     src/utils/crc32.cpp
     src/utils/env_posix.cpp
+    src/utils/metrics.cpp
 )
 
 target_include_directories(minikv PUBLIC

@@ -1,4 +1,4 @@
-﻿#include "core/sstable_builder.h"
+#include "core/sstable_builder.h"
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -24,7 +24,6 @@ SSTableBuilder::SSTableBuilder(const std::string& path,
       offset_(0),
       finished_(false),
       entry_count_(0) {
-    bloom_ = std::make_unique<BloomFilter>(10000, 0.01);
     fd_ = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
 }
 
@@ -37,7 +36,7 @@ Status SSTableBuilder::add(const Slice& internalKey,
                            const Slice& userKey,
                            const Slice& value) {
     data_block_.add(internalKey, value);
-    bloom_->add(userKey);
+    bloom_keys_.emplace_back(userKey.toString());
     last_key_ = internalKey.toString();
     entry_count_++;
     if (data_block_.size() >= block_size_) {
@@ -99,7 +98,14 @@ Status SSTableBuilder::finish() {
     finished_ = true;
     flushDataBlock();
 
-    bloom_->persist(path_ + ".bloom");
+    {
+        size_t n = bloom_keys_.empty() ? 1 : bloom_keys_.size();
+        bloom_ = std::make_unique<BloomFilter>(n, 0.01);
+        for (const auto& k : bloom_keys_) bloom_->add(Slice(k));
+        bloom_->persist(path_ + ".bloom");
+        bloom_keys_.clear();
+        bloom_keys_.shrink_to_fit();
+    }
 
     uint64_t index_offset = offset_;
     uint32_t index_crc = utils::crc32c(index_block_.data(),

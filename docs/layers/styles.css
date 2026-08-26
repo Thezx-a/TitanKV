@@ -784,7 +784,3 @@ table.compare .win { color: #3E6B3E; font-weight: 600; }
 table.compare .lose { color: var(--ink-mute); }
 table.compare td code { font-size: .82em; }
 
-
-/* SVG architecture diagram */
-.arch-svg-wrap { margin: 1.5em 0; text-align: center; }
-.arch-svg-wrap img { max-width: 100%; height: auto; border-radius: 8px; box-shadow: var(--shadow); }

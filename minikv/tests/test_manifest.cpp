@@ -118,6 +118,7 @@ TEST(ManifestTest, TruncatedTailRecordIsIgnored) {
     std::string dir = uniqueDir();
     ::mkdir(dir.c_str(), 0755);
     std::string manifest = dir + "/MANIFEST";
+    off_t size_before = 0;
     {
         Manifest m(dir);
         ASSERT_TRUE(m.open().ok());
@@ -128,6 +129,7 @@ TEST(ManifestTest, TruncatedTailRecordIsIgnored) {
     // Truncate the MANIFEST file to simulate a torn write at the end.
     struct stat st;
     ::stat(manifest.c_str(), &st);
+    size_before = st.st_size;
     int fd = ::open(manifest.c_str(), O_WRONLY);
     ::ftruncate(fd, st.st_size - 3);  // bite off 3 bytes of the last record
     ::close(fd);
@@ -136,9 +138,24 @@ TEST(ManifestTest, TruncatedTailRecordIsIgnored) {
         Manifest m(dir);
         ASSERT_TRUE(m.open().ok());
         // Only the first record should be visible.
-        ASSERT_GE(m.levels().at(0).size(), 1u);
+        ASSERT_EQ(m.levels().at(0).size(), 1u);
         EXPECT_EQ(m.levels().at(0)[0].path, "/data/good.sst");
-        EXPECT_NE(m.levels().at(0).back().path, "/data/part.sst");
+
+        // [P0-3] File must be truncated to last good offset.
+        struct stat st2;
+        ASSERT_EQ(::stat(manifest.c_str(), &st2), 0);
+        EXPECT_LT(st2.st_size, size_before);
+
+        // Append after self-heal must survive reopen.
+        ASSERT_TRUE(m.recordAddFile(0, "/data/new.sst", 3).ok());
+        ASSERT_TRUE(m.sync().ok());
+    }
+    {
+        Manifest m(dir);
+        ASSERT_TRUE(m.open().ok());
+        ASSERT_EQ(m.levels().at(0).size(), 2u);
+        EXPECT_EQ(m.levels().at(0)[0].path, "/data/good.sst");
+        EXPECT_EQ(m.levels().at(0)[1].path, "/data/new.sst");
     }
     cleanup(dir);
 }
@@ -184,5 +201,29 @@ TEST(ManifestTest, RewriteSnapshotCompactsAndKeepsLiveFiles) {
     }
     // cleanup also removes bak if present
     ::unlink((dir + "/MANIFEST.bak").c_str());
+    cleanup(dir);
+}
+
+
+// [P0-3] Opening a DB whose MANIFEST spans more levels than config must not
+// crash or drop files — keep on-disk span and warn.
+TEST(ManifestTest, OpenWithSmallerConfiguredLevelsKeepsData) {
+    std::string dir = uniqueDir();
+    ::mkdir(dir.c_str(), 0755);
+    {
+        Manifest m(dir, /*level_count=*/8);
+        ASSERT_TRUE(m.open().ok());
+        ASSERT_TRUE(m.recordAddFile(0, "/data/a.sst", 1).ok());
+        ASSERT_TRUE(m.recordAddFile(5, "/data/deep.sst", 2).ok());
+        ASSERT_TRUE(m.sync().ok());
+    }
+    {
+        Manifest m(dir, /*level_count=*/3);  // smaller than on-disk span
+        ASSERT_TRUE(m.open().ok());
+        ASSERT_GE(m.levels().size(), 6u);
+        ASSERT_EQ(m.levels().at(0).size(), 1u);
+        ASSERT_EQ(m.levels().at(5).size(), 1u);
+        EXPECT_EQ(m.levels().at(5)[0].path, "/data/deep.sst");
+    }
     cleanup(dir);
 }

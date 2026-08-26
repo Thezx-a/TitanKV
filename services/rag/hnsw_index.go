@@ -5,7 +5,6 @@ import (
 	"math"
 	"math/rand"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -269,15 +268,7 @@ func (h *HNSWIndex) MergeSnapshot(path string) error {
 }
 
 func (h *HNSWIndex) saveSnapshotFile(path string, vecs map[string][]float32) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	return json.NewEncoder(f).Encode(snapshotFile{Dim: h.dim, Vectors: vecs})
+	return atomicWriteJSON(path, snapshotFile{Dim: h.dim, Vectors: vecs})
 }
 
 // VectorIndex abstracts brute SideIndex and HNSWIndex.

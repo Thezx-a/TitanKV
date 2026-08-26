@@ -9,6 +9,7 @@
 #include <vector>
 #include "core/compaction.h"
 #include "core/block_cache.h"
+#include "core/table_cache.h"
 #include "core/manifest.h"
 #include "core/memtable.h"
 #include "core/memtable_iterator.h"
@@ -35,9 +36,12 @@ public:
     std::unique_ptr<Iterator> newIterator(const ReadOptions& opts) override;
     void compact() override;
     void waitFlush() override;
+    void waitCompaction() override;
 
 private:
     void maybeFlush();
+    // T2.5: block (or Busy) until immutable/L0 under stall limits.
+    Status waitUntilWritable();
     Status recover();
     // Garbage-collect orphan SSTables on disk (crash-left files not in MANIFEST).
     Status purgeOrphanSSTables();
@@ -130,6 +134,7 @@ private:
 
     Version                   version_;
     std::unique_ptr<BlockCache> block_cache_;
+    std::unique_ptr<TableCache> table_cache_;
     std::unique_ptr<CompactionManager> compaction_mgr_;
 };
 

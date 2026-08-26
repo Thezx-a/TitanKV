@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include "core/internal_key.h"
 #include "minikv/slice.h"
 
 namespace minikv {
@@ -36,6 +37,7 @@ class BlockReader {
 public:
     explicit BlockReader(const Slice& block_data);
     std::optional<std::string> get(const Slice& key) const;
+    PointLookup lookupByUserKey(const Slice& userKey, std::string* value) const;
     std::optional<std::string> getByUserKey(const Slice& userKey) const;
     size_t numEntries() const { return num_entries_; }
 

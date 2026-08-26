@@ -18,6 +18,7 @@ type ServiceURLs struct {
 	Auth    string
 	Gateway string
 	Rag     string
+	MiniKV  string
 }
 
 func LoadServiceURLs() ServiceURLs {
@@ -27,6 +28,7 @@ func LoadServiceURLs() ServiceURLs {
 		Auth:    envOr("AUTH_SERVICE_URL", "http://127.0.0.1:8082"),
 		Gateway: envOr("GATEWAY_URL", "http://127.0.0.1:18080"),
 		Rag:     envOr("RAG_SERVICE_URL", "http://127.0.0.1:8085"),
+		MiniKV:  envOr("MINIKV_METRICS_URL", "http://127.0.0.1:9091"),
 	}
 }
 
@@ -112,6 +114,26 @@ func approxLatencyMs(body, name string) (p50, p99 float64) {
 	return avg, avg * 2.5
 }
 
+func scrapeEngineMetrics(client *http.Client, metricsURL string) (activity float64, p50ms, p99ms float64, ok bool) {
+	resp, err := client.Get(metricsURL)
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0, 0, false
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	text := string(body)
+	// Engine exports counters only (no latency histogram yet) — use puts+gets as activity.
+	activity = sumPromCounter(text, "titankv_engine_puts_total") +
+		sumPromCounter(text, "titankv_engine_gets_total")
+	return activity, 0, 0, true
+}
+
 func buildSnapshot(urls ServiceURLs) (Metrics, map[string]string) {
 	client := &http.Client{Timeout: 2 * time.Second}
 	deps := map[string]string{
@@ -120,6 +142,7 @@ func buildSnapshot(urls ServiceURLs) (Metrics, map[string]string) {
 		"auth-service":   probeHealth(client, urls.Auth+"/healthz"),
 		"gateway":        probeHealth(client, urls.Gateway+"/healthz"),
 		"rag-service":    probeHealth(client, urls.Rag+"/healthz"),
+		"minikv-engine":  probeHealth(client, urls.MiniKV+"/healthz"),
 		"storage-engine": "unknown",
 	}
 
@@ -139,6 +162,11 @@ func buildSnapshot(urls ServiceURLs) (Metrics, map[string]string) {
 		totalQPS += q
 		p50 += a
 		p99 += b
+		n++
+	}
+	// T2.6(minimal): also scrape C++ engine counters (puts/gets as activity signal).
+	if q, _, _, ok := scrapeEngineMetrics(client, urls.MiniKV+"/metrics"); ok {
+		totalQPS += q
 		n++
 	}
 	if n > 0 {

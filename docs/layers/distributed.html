@@ -201,6 +201,352 @@ gateway/shard.go        FNV 分片辅助 (实验)</code></pre>
       多机生产集群、自动 rebalance、跨片事务 <strong>未做</strong>——简历可不写 Raft。
     </div>
 
+    <section class="analysis" id="analysis">
+      <h2>设计深度分析</h2>
+      <p class="lead">本节聚焦 Raft 共识子系统在崩溃恢复、技术选型、并发约束等方面的取舍——为什么这样设计，好处与代价是什么，未来怎么优化。</p>
+
+      <h3>1. 崩溃恢复 · 七种场景与 Raft 不变量</h3>
+      <p>Raft 的核心承诺是 <strong>"已 commit 的 Log 不会被覆盖"</strong> 与 <strong>"已 Apply 的状态可重放重建"</strong>。下面用七个崩溃点逐一对照该承诺。</p>
+
+      <div class="scenario-grid">
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">CASE A</span><span class="stitle">客户端请求未达 leader</span></div>
+          <p class="sbody">网络分区或 leader 不可达，请求超时。Raft 无任何状态变更；客户端幂等重试即可。</p>
+          <span class="sresult ok">语义：无损 · 仅客户端体验降级</span>
+        </div>
+
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">CASE B</span><span class="stitle">leader 复制到一半崩溃</span></div>
+          <p class="sbody">未达多数复制 → Log 未 commit。新 leader 选出后会丢弃前任未 commit 的 Log（term 比较 + log 匹配属性）。客户端重试可能产生重复写入。</p>
+          <span class="sresult warn">语义：强一致未破坏 · 但非幂等操作需上层去重</span>
+        </div>
+
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">CASE C</span><span class="stitle">Apply 中途进程崩</span></div>
+          <p class="sbody">重启后 raft 重放未 Snapshot 的 Log，FSM 的 map 写入天然幂等，状态最终一致。<strong>前提：Apply 必须确定性</strong>，不能引入外部 IO 或随机性。</p>
+          <span class="sresult ok">语义：可恢复 · 依赖 Apply 幂等性</span>
+        </div>
+
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">CASE D</span><span class="stitle">内存 map 丢失</span></div>
+          <p class="sbody">进程崩 → map 清空，但 raft Log + snapshot 在磁盘持久化。重启先 Restore snapshot 再重放后续 Log，状态完整重建。</p>
+          <span class="sresult ok">语义：可恢复 · 落盘是真理源的真正后盾</span>
+        </div>
+
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">CASE E</span><span class="stitle">WriteForwarder 转发 MiniKV 失败</span></div>
+          <p class="sbody">FSM map 已更新，LSM 未同步。<strong>不能让 Apply 失败</strong>，否则副本发散。MiniKV 最终一致；读路径必要时回退到 FSM。</p>
+          <span class="sresult warn">语义：FSM 是真理源 · MiniKV 仅做加速读</span>
+        </div>
+
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">CASE F</span><span class="stitle">Snapshot 写盘中途崩</span></div>
+          <p class="sbody">Persist 失败 → <code>sink.Cancel()</code>，raft 不认这次 Snapshot，下次重新触发。旧 Log 不截断，无任何状态污染。</p>
+          <span class="sresult ok">语义：原子性靠 sink 抽象保证</span>
+        </div>
+
+        <div class="scenario danger">
+          <div class="shead"><span class="snum">CASE G</span><span class="stitle">snapshot 文件损坏</span></div>
+          <p class="sbody">raft 启动加载失败 → 拒绝启动。需运维介入或回退到更早 snapshot（hashicorp/raft 不自动回退多版本）。</p>
+          <span class="sresult warn">语义：需外部备份 · 单文件是单点</span>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">为什么这样设计？</span>
+        <strong>核心权衡：</strong>Raft 把"状态变更"序列化为"日志条目"，让副本间只复制一个不可变序列，再各自 Apply。崩溃恢复因此变成"<strong>重放确定性序列</strong>"这一件事，复杂度从"分布式状态协调"降到"日志回放"。代价是：<strong>所有写都过 leader</strong>、<strong>Apply 必须确定性</strong>、<strong>读不强一致</strong>。
+      </div>
+
+      <h3>2. Raft vs Paxos · 为什么选 Raft</h3>
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>Raft</th><th>Paxos (Multi-Paxos)</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>理解成本</strong></td>
+            <td class="win">强 leader + term 编号，状态机清晰</td>
+            <td>提议者/接受者/学习者三角色，prepare+accept 两阶段</td>
+          </tr>
+          <tr>
+            <td><strong>工程实现</strong></td>
+            <td class="win">hashicorp/raft / etcd-raft 开箱即用，~3k 行核心</td>
+            <td>工业实现少，Spanner/Chubby 内部不公开</td>
+          </tr>
+          <tr>
+            <td><strong>日志结构</strong></td>
+            <td class="win">顺序追加，成员变更有标准 Joint Consensus</td>
+            <td>无统一日志模型，需上层自定义</td>
+          </tr>
+          <tr>
+            <td><strong>异常路径</strong></td>
+            <td class="win">leader election + log catch-up + snapshot 都有规范</td>
+            <td>异常路径多靠实现者自己定义</td>
+          </tr>
+          <tr>
+            <td><strong>性能</strong></td>
+            <td>leader 是瓶颈，可优化 Multi-Raft</td>
+            <td class="win">可多 proposer 并行，理论吞吐略高</td>
+          </tr>
+          <tr>
+            <td><strong>教学价值</strong></td>
+            <td class="win">论文带图，状态转换可数</td>
+            <td>论文数学化，难讲清</td>
+          </tr>
+        </tbody>
+      </table>
+      <p><strong>结论：</strong>本项目是教学型 + 单节点起步，Raft 的可读性和成熟库让 FSM 三件套能被快速验证。Paxos 理论更通用但实现门槛高，不适合单人项目。</p>
+
+      <h3>3. 内存 FSM map vs 持久化 KV 状态机 · 为什么用内存 map</h3>
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>内存 map (本项目)</th><th>持久化 KV (etcd 模式)</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Apply 实现</strong></td>
+            <td class="win"><code>m[k]=v</code>，零 IO，&lt;10ns</td>
+            <td>每次 Apply 一次 LSM/BBTree 写入，ms 级</td>
+          </tr>
+          <tr>
+            <td><strong>Snapshot</strong></td>
+            <td class="win">JSON 编码整个 map，简单</td>
+            <td>需触发 flush / compaction，复杂</td>
+          </tr>
+          <tr>
+            <td><strong>Restore</strong></td>
+            <td class="win">JSON 解码整体替换</td>
+            <td>逐条回放或 reload 整树</td>
+          </tr>
+          <tr>
+            <td><strong>重启速度</strong></td>
+            <td class="win">Restore snapshot + 重放有限 Log</td>
+            <td>状态机本身已落盘，重启快但 Apply 一直慢</td>
+          </tr>
+          <tr>
+            <td><strong>容量上限</strong></td>
+            <td>受内存限制，TB 级不可行</td>
+            <td class="win">受磁盘限制，可扩到 PB</td>
+          </tr>
+          <tr>
+            <td><strong>真理源责任</strong></td>
+            <td>FSM 即真理源，MiniKV 仅镜像</td>
+            <td class="win">状态机即持久层，无双重真理源问题</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="procon">
+        <div class="pros">
+          <h4>优点</h4>
+          <ul>
+            <li>实现简单：FSM 不依赖磁盘 IO，Apply 不阻塞共识</li>
+            <li>Snapshot 用 JSON 易读，调试方便</li>
+            <li>教学价值最大化：FSM 三件套逻辑清晰可观察</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>缺点</h4>
+          <ul>
+            <li>双重真理源：FSM map 与 MiniKV LSM 并存，需 WriteForwarder 软同步</li>
+            <li>容量受限于单机内存</li>
+            <li>读最终一致，不能扛跨副本强一致读</li>
+          </ul>
+        </div>
+      </div>
+      <p><strong>优化方向：</strong>① 状态机直接落盘（BoltDB 模式，etcd 的做法），消除 WriteForwarder 双写；② 引入 ReadIndex / Lease Read 提供线性一致读；③ 大数据量下改用增量 Snapshot（差量 + SST 复制）替代整 map JSON。</p>
+
+      <h3>4. 为什么 WriteForwarder 必须 best-effort · 共识的确定性铁律</h3>
+      <p>若让 MiniKV 写失败回滚 Apply，会触发<strong>副本发散</strong>：副本 A 的 MiniKV 写成功 → Apply 返回 ok；副本 B 的 MiniKV 写失败 → Apply 返回 err。raft 看到 A/B Apply 同一条 Log 的结果不一致，状态机崩坏。</p>
+      <div class="procon">
+        <div class="pros">
+          <h4>best-effort 的好处</h4>
+          <ul>
+            <li>保留 Apply 的确定性（同一 Log 在所有副本产生相同 map 状态）</li>
+            <li>外部 IO 失败不污染共识层</li>
+            <li>FSM 仍是真理源，重启从 raft 重建</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>代价</h4>
+          <ul>
+            <li>MiniKV 与 FSM 短期不一致（最终一致）</li>
+            <li>读路径需处理 fallback：FSM → MiniKV</li>
+            <li>需引入对账任务定期校验两者差量</li>
+          </ul>
+        </div>
+      </div>
+      <p><strong>优化方向：</strong>把 MiniKV 写入从"Apply 后异步"改成"Apply 内同步但只更新 LSM 的 WAL 阶段"（写 WAL 快、ms 级），崩溃恢复时 FSM 重放 → MiniKV WAL replay，两者状态对齐。</p>
+
+      <h3>5. Snapshot 策略 · 全量 JSON vs 增量 SST</h3>
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>全量 JSON map (本项目)</th><th>增量 SST (RocksDB/etcd 模式)</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>实现复杂度</strong></td>
+            <td class="win">~30 行，<code>json.Marshal</code></td>
+            <td>需在 FSM 内实现层级的 SST 文件追踪与差量序列化</td>
+          </tr>
+          <tr>
+            <td><strong>大状态表现</strong></td>
+            <td>map 越大 Snapshot 越慢，1GB 起就明显</td>
+            <td class="win">只复制变化层，GB 级仍快</td>
+          </tr>
+          <tr>
+            <td><strong>Restore 速度</strong></td>
+            <td>JSON 解码全量，慢</td>
+            <td class="win">直接 mmap SST 文件，秒级</td>
+          </tr>
+          <tr>
+            <td><strong>存储空间</strong></td>
+            <td>每次 Snapshot 完整副本</td>
+            <td class="win">Level 元数据共享文件，省空间</td>
+          </tr>
+          <tr>
+            <td><strong>调试友好</strong></td>
+            <td class="win">snapshot 是可读 JSON</td>
+            <td>需 SST dump 工具</td>
+          </tr>
+        </tbody>
+      </table>
+      <p><strong>结论：</strong>教学场景下 map &lt; 100MB 时全量 JSON 足够；生产场景必须改增量 SST。RocksDB Checkpoint 接口是最成熟的增量 snapshot 实现参考。</p>
+
+      <h3>6. 单节点 Bootstrap vs 多 voter 集群 · 教学梯度</h3>
+      <div class="scenario-grid">
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">阶段 1</span><span class="stitle">1-node Bootstrap</span></div>
+          <p class="sbody">单节点自举为 leader，验证 FSM Apply/Snapshot/Restore 三件套工作正常，无复制复杂性。</p>
+          <span class="sresult ok">已实现 · 核心抽象可信</span>
+        </div>
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">阶段 2</span><span class="stitle">JoinCluster 多 voter 演示</span></div>
+          <p class="sbody">通过 <code>raft.AddVoter</code> 把 follower 加入集群，验证 leader 复制 + 半数 commit 路径，但仍是同机多实例。</p>
+          <span class="sresult warn">演示性 · 真实多机需网络与运维</span>
+        </div>
+        <div class="scenario danger">
+          <div class="shead"><span class="snum">阶段 3</span><span class="stitle">多机生产集群 (planned)</span></div>
+          <p class="sbody">跨机 leader/follower、节点发现、自动 rebalance、跨片事务 —— 尚未实现，是后续规划。</p>
+          <span class="sresult warn">未做 · 简历可不写 Raft 生产能力</span>
+        </div>
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">阶段 4</span><span class="stitle">一致性哈希分片 (planned)</span></div>
+          <p class="sbody"><code>distributed/shard</code> 与 <code>skynet ConsistentHashLB</code> 联动，把 key 分散到多 raft 组，每个组独立选主。</p>
+          <span class="sresult warn">规划 · 与 L2 负载均衡联动</span>
+        </div>
+      </div>
+      <p><strong>为什么渐进式实现：</strong>Raft 共识算法实现复杂，单节点先把 FSM 三件套抽象稳了，再加多机；分片放在最后是因为它依赖前两者的稳定性。一步到位多机分片会让调试难度指数级上升。</p>
+
+      <h3>7. Raft 日志 vs Redis AOF · 都是日志，差在哪</h3>
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>Raft Log</th><th>Redis AOF</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>复制语义</strong></td>
+            <td class="win">多数 commit 才算成功，强一致</td>
+            <td>异步复制到副本，最终一致</td>
+          </tr>
+          <tr>
+            <td><strong>leader 角色</strong></td>
+            <td>强 leader，所有写必经</td>
+            <td class="win">主从弱 leader，可读写分离</td>
+          </tr>
+          <tr>
+            <td><strong>故障切换</strong></td>
+            <td class="win">自动选主，term + 投票</td>
+            <td>Sentinel / Cluster 模式，配置复杂</td>
+          </tr>
+          <tr>
+            <td><strong>性能</strong></td>
+            <td>多副本 RTT 拖累，写 ~1ms</td>
+            <td class="win">单机内存写，&lt;100us</td>
+          </tr>
+          <tr>
+            <td><strong>一致性保证</strong></td>
+            <td class="win">已 commit Log 不丢</td>
+            <td>fsync 策略决定，可能丢 1s 数据</td>
+          </tr>
+        </tbody>
+      </table>
+      <p><strong>结论：</strong>Redis AOF 优化"快"，Raft 优化"强一致"。本项目用 Raft 做 map 真理源（量小、一致性高），用 MiniKV LSM 做热数据存储（量大、最终一致）—— 二者互补。</p>
+
+      <h3>8. hashicorp/raft vs etcd-raft · 库选型</h3>
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>hashicorp/raft (本项目)</th><th>etcd-raft</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>API 易用</strong></td>
+            <td class="win">FSM 接口 3 个方法，~50 行起步</td>
+            <td>需实现 RaftReady 全套回调，~500 行</td>
+          </tr>
+          <tr>
+            <td><strong>传输层</strong></td>
+            <td class="win">自带 TCP transport，开箱即用</td>
+            <td>需自行实现 RaftTransport，集成 gRPC</td>
+          </tr>
+          <tr>
+            <td><strong>Multi-Raft</strong></td>
+            <td>无原生支持</td>
+            <td class="win">原生 Multi-Raft，分片友好</td>
+          </tr>
+          <tr>
+            <td><strong>生产成熟度</strong></td>
+            <td>Consul/Vault/Nomad 用，稳</td>
+            <td class="win">etcd/K8s 用，承载大规模生产</td>
+          </tr>
+          <tr>
+            <td><strong>性能</strong></td>
+            <td>中等，单 Raft 组上限 ~10k QPS</td>
+            <td class="win">高，Multi-Raft + Batch 可百万 QPS</td>
+          </tr>
+        </tbody>
+      </table>
+      <p><strong>结论：</strong>教学场景 hashicorp/raft 上手快；etcd-raft 适合追求极致性能与多组分片的生产实现。本项目未来若做多组分片，可平滑迁移到 etcd-raft。</p>
+
+      <h3>9. 总体优缺点与优化路线</h3>
+      <div class="procon">
+        <div class="pros">
+          <h4>当前设计优点</h4>
+          <ul>
+            <li>FSM 三件套清晰可验证，状态机抽象纯洁</li>
+            <li>Apply 不做 IO，共识层延迟低、实现稳</li>
+            <li>Snapshot 用 JSON 易调试、可读</li>
+            <li>WriteForwarder 边界明确：FSM 是真理源，MiniKV 是镜像</li>
+            <li>hashicorp/raft 库稳定，文档丰富</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>当前设计缺点</h4>
+          <ul>
+            <li>单节点 Raft 共识没复制，只是验证抽象</li>
+            <li>全量 JSON Snapshot 大状态时不可用</li>
+            <li>双重真理源（map + MiniKV）增加读路径复杂度</li>
+            <li>读最终一致，不抗跨副本强一致读</li>
+            <li>无 Multi-Raft，分片方案未落地</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">优化路线（按优先级）</span>
+        <strong>P0 · 多机三节点集群：</strong>真正验证半数复制、leader 切换、follower 追赶；<br>
+        <strong>P1 · ReadIndex 线性一致读：</strong>读前向 leader 确认 lease，提供强一致读；<br>
+        <strong>P1 · 增量 SST Snapshot：</strong>替换 JSON 全量，参考 RocksDB Checkpoint；<br>
+        <strong>P2 · 状态机落盘：</strong>消除 WriteForwarder 双写，FSM 直接驱动 BoltDB；<br>
+        <strong>P3 · Multi-Raft 分片：</strong>迁移到 etcd-raft，与 L2 一致性哈希联动；<br>
+        <strong>P3 · 跨片事务：</strong>Percolator 模型或两阶段提交。
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">为什么这个层是 L5？</span>
+        L3 网关 → L4 微服务 → <strong>L5 分布式 Raft</strong> → L6 存储。Raft 层在微服务和存储之间：上层调用 <code>raft.Apply</code> 写入共识，下层把共识真理源镜像到 MiniKV LSM。这样<strong>上层接口简单</strong>（不知道底层存储），<strong>下层存储可换</strong>（不知道上层业务），Raft 充当了"一致性仲裁者"。详见 <a href="index.html#flow">请求链路</a> 与 <a href="storage.html#analysis">存储引擎设计分析</a>。
+      </div>
+    </section>
+
   </main>
 </div>
 

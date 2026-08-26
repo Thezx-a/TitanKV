@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SpectrumCore 工业化进度 · 2026-08-26</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --bg2: #171e26;
+    --panel: #1c2530;
+    --ink: #e8eef4;
+    --muted: #8b9aab;
+    --line: #2a3644;
+    --accent: #d4a017;
+    --ok: #3dba7a;
+    --partial: #e0a23a;
+    --teach: #6b8cae;
+    --warn: #c45c5c;
+    --font-display: "IBM Plex Sans", "Segoe UI", sans-serif;
+    --font-mono: "IBM Plex Mono", "Consolas", monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: var(--font-display);
+    background:
+      radial-gradient(1200px 600px at 10% -10%, #1a2838 0%, transparent 55%),
+      radial-gradient(900px 500px at 100% 0%, #241c10 0%, transparent 50%),
+      var(--bg);
+    color: var(--ink);
+    line-height: 1.55;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 2.25rem 1.25rem 4rem; }
+  header.meta {
+    display: grid;
+    gap: 0.75rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 2rem;
+  }
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  h1 {
+    margin: 0;
+    font-size: clamp(1.6rem, 3vw, 2.2rem);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  .sub { color: var(--muted); max-width: 46rem; margin: 0; }
+  .chips {
+    display: flex; flex-wrap: wrap; gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+  .chip {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    padding: 0.35rem 0.65rem;
+    border: 1px solid var(--line);
+    background: var(--bg2);
+    border-radius: 2px;
+  }
+  .chip strong { color: var(--ok); font-weight: 600; }
+  h2 {
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin: 2.25rem 0 0.85rem;
+    letter-spacing: 0.01em;
+  }
+  h2 span {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--muted);
+    margin-left: 0.5rem;
+    font-weight: 400;
+  }
+  .tiers {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.75rem;
+  }
+  @media (max-width: 800px) { .tiers { grid-template-columns: 1fr; } }
+  .tier {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    padding: 1rem 1.05rem;
+    border-radius: 4px;
+  }
+  .tier h3 {
+    margin: 0 0 0.4rem;
+    font-size: 0.95rem;
+  }
+  .tier p { margin: 0; font-size: 0.86rem; color: var(--muted); }
+  .dot { display: inline-block; width: 0.55rem; height: 0.55rem; border-radius: 50%; margin-right: 0.4rem; }
+  .dot.ok { background: var(--ok); }
+  .dot.partial { background: var(--partial); }
+  .dot.teach { background: var(--teach); }
+  table.matrix {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.88rem;
+    background: var(--panel);
+    border: 1px solid var(--line);
+  }
+  .matrix th, .matrix td {
+    text-align: left;
+    padding: 0.65rem 0.75rem;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  .matrix th {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--muted);
+    font-weight: 500;
+    background: var(--bg2);
+  }
+  .matrix tr:last-child td { border-bottom: 0; }
+  .tag {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    padding: 0.15rem 0.45rem;
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+  .tag.solid { background: rgba(61,186,122,0.15); color: var(--ok); }
+  .tag.mvp { background: rgba(224,162,58,0.15); color: var(--partial); }
+  .tag.teach { background: rgba(107,140,174,0.18); color: #9bb6d0; }
+  .tag.done { background: rgba(61,186,122,0.15); color: var(--ok); }
+  .tag.part { background: rgba(224,162,58,0.18); color: var(--partial); }
+  .tag.min { background: rgba(107,140,174,0.18); color: #9bb6d0; }
+  .ms-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 0.65rem;
+  }
+  .ms {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--ok);
+    padding: 0.85rem 0.9rem;
+    border-radius: 0 4px 4px 0;
+  }
+  .ms.partial { border-left-color: var(--partial); }
+  .ms.minimal { border-left-color: var(--teach); }
+  .ms .id {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--accent);
+  }
+  .ms h3 { margin: 0.25rem 0 0.35rem; font-size: 0.92rem; font-weight: 600; }
+  .ms p { margin: 0; font-size: 0.82rem; color: var(--muted); }
+  .tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.75rem; }
+  .tabs button {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    background: var(--bg2);
+    color: var(--muted);
+    border: 1px solid var(--line);
+    padding: 0.45rem 0.7rem;
+    cursor: pointer;
+    border-radius: 2px;
+  }
+  .tabs button[aria-selected="true"] {
+    color: var(--ink);
+    border-color: var(--accent);
+    background: #2a2418;
+  }
+  .panel {
+    display: none;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    padding: 1rem;
+    border-radius: 4px;
+  }
+  .panel.active { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 720px) { .panel.active { grid-template-columns: 1fr; } }
+  .col h4 {
+    margin: 0 0 0.5rem;
+    font-size: 0.8rem;
+    font-family: var(--font-mono);
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .col ul { margin: 0; padding-left: 1.1rem; font-size: 0.86rem; }
+  .col.bad h4 { color: var(--warn); }
+  .col.good h4 { color: var(--ok); }
+  .evidence {
+    grid-column: 1 / -1;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--muted);
+    border-top: 1px solid var(--line);
+    padding-top: 0.65rem;
+    margin-top: 0.25rem;
+  }
+  .remain {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+  }
+  @media (max-width: 720px) { .remain { grid-template-columns: 1fr; } }
+  .remain .box {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    padding: 1rem;
+    border-radius: 4px;
+  }
+  .remain h3 { margin: 0 0 0.5rem; font-size: 0.95rem; }
+  .remain ul { margin: 0; padding-left: 1.1rem; color: var(--muted); font-size: 0.86rem; }
+  footer {
+    margin-top: 2.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--line);
+    font-size: 0.8rem;
+    color: var(--muted);
+    font-family: var(--font-mono);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .ms, .tier { transition: none; }
+  }
+  .ms, .tier { transition: border-color 0.2s ease, transform 0.2s ease; }
+  .ms:hover, .tier:hover { border-color: #3d4d5e; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="meta">
+      <div class="eyebrow">SpectrumCore · Industrialization Progress</div>
+      <h1>项目工业化进度汇总</h1>
+      <p class="sub">基于 <code>docs/industrialization-plan.md</code> 与分支 <code>feat/industrialization</code> 的诚实边界快照。已完成 P0（M1–M4）、MVP 主链（M5–M10）及引擎 T2 关键项；未宣称生产级多机 / 完整 Grafana 仪表盘。</p>
+      <div class="chips">
+        <span class="chip">分支 <strong>feat/industrialization</strong></span>
+        <span class="chip">日期 <strong>2026-08-26</strong></span>
+        <span class="chip">C++ <strong>106/106</strong> ctest</span>
+        <span class="chip">Go <strong>race 全绿</strong></span>
+        <span class="chip">验证 <strong>make cmake-build + cpp-test + go-test</strong></span>
+      </div>
+    </header>
+
+    <h2>成熟度三分法 <span>较完善 ≠ 生产就绪</span></h2>
+    <div class="tiers">
+      <div class="tier">
+        <h3><span class="dot ok"></span>较完善</h3>
+        <p>正确性契约 + 回归测试已落地（tombstone / WAL / MANIFEST / MemTable seek / TableCache / 流式 compact 等）。仍非 RocksDB 级运维。</p>
+      </div>
+      <div class="tier">
+        <h3><span class="dot partial"></span>MVP</h3>
+        <p>主路径可跑；边界/压力/完整故障注入未齐。网络 M8 标「部分」，RAG 快照 M7 标「最小」。</p>
+      </div>
+      <div class="tier">
+        <h3><span class="dot teach"></span>教学</h3>
+        <p>Raft 单节点、K8s/Helm、完整直方图/Grafana JSON 等：演示或未落地，不作生产承诺。</p>
+      </div>
+    </div>
+
+    <h2>模块矩阵 <span>对照 README 诚实口径</span></h2>
+    <table class="matrix">
+      <thead>
+        <tr><th>模块</th><th>分层</th><th>说明</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>minikv 写路径 / WAL group commit</td><td><span class="tag solid">较完善</span></td><td>WAL→MemTable、异步 flush、reopen 测试</td></tr>
+        <tr><td>Compaction tombstone + Get 三态</td><td><span class="tag solid">较完善</span></td><td>M1；流式 merge T2.1 已接</td></tr>
+        <tr><td>WAL / MANIFEST 截断 + fsyncDir</td><td><span class="tag solid">较完善*</span></td><td>*WSL 无法真断电模拟</td></tr>
+        <tr><td>SST 读校验 / Bloom 生命周期</td><td><span class="tag solid">较完善</span></td><td>M5/M6；损坏传播回归已修稳</td></tr>
+        <tr><td>MemTable O(log n) / TableCache</td><td><span class="tag solid">较完善</span></td><td>M9 + T2.3；live MemTable 迭代仍快照拷贝</td></tr>
+        <tr><td>Write Stall / 引擎 metrics</td><td><span class="tag mvp">MVP*</span></td><td>T2.5 全量；T2.6 最小（计数器+/metrics，无直方图）</td></tr>
+        <tr><td>minikv 网络边界</td><td><span class="tag mvp">MVP 部分</span></td><td>M8：请求上限+EPOLLOUT；idle 超时未做</td></tr>
+        <tr><td>skynet_gateway</td><td><span class="tag mvp">MVP</span></td><td>ET+协程旁路演示</td></tr>
+        <tr><td>Gin / Auth / Data / Meta</td><td><span class="tag mvp">MVP</span></td><td>主链可联调，非生产运维</td></tr>
+        <tr><td>RAG</td><td><span class="tag mvp">MVP 最小</span></td><td>M7 原子快照+重建；M10 删除三处一致</td></tr>
+        <tr><td>Web / client-cli</td><td><span class="tag mvp">MVP</span></td><td>功能可用，质量优化未开</td></tr>
+        <tr><td>distributed / Raft</td><td><span class="tag teach">教学</span></td><td>1-node 教学，非多机生产</td></tr>
+        <tr><td>K8s / Helm / 完整可观测</td><td><span class="tag teach">未落地/教学</span></td><td>计划 stage 2/3</td></tr>
+      </tbody>
+    </table>
+
+    <h2>本轮里程碑 <span>M1–M10 + T2</span></h2>
+    <div class="ms-grid">
+      <article class="ms"><div class="id">M1 · P0</div><h3>Tombstone 语义</h3><p>非底层保留删除标记；Get 三态 PointLookup。</p></article>
+      <article class="ms"><div class="id">M2 · P0</div><h3>WAL 损坏尾</h3><p>replay 后 ftruncate，避免静默丢后续记录。</p></article>
+      <article class="ms"><div class="id">M3 · P0</div><h3>MANIFEST 恢复</h3><p>截断损坏尾 + level_count 解耦。</p></article>
+      <article class="ms"><div class="id">M4 · P0</div><h3>目录 fsync</h3><p>rewriteSnapshot 后 fsyncDir。</p></article>
+      <article class="ms"><div class="id">M5</div><h3>SST 错误传播</h3><p>Corruption/IOError 上浮，禁止 silent NotFound。</p></article>
+      <article class="ms"><div class="id">M6</div><h3>Bloom 生命周期</h3><p>孤儿 .bloom 清理；按条数建 filter。</p></article>
+      <article class="ms minimal"><div class="id">M7 · 最小</div><h3>RAG 原子快照</h3><p>tmp→fsync→rename；启动 RebuildFromStore。</p></article>
+      <article class="ms partial"><div class="id">M8 · 部分</div><h3>网络边界</h3><p>kMaxRequest + 写缓冲上限 + EPOLLOUT。</p></article>
+      <article class="ms"><div class="id">M9</div><h3>MemTable O(log n)</h3><p>SkipList lowerBound / seek；惰性 imm 迭代。</p></article>
+      <article class="ms"><div class="id">M10</div><h3>删除一致性</h3><p>store + side index + snapshot 对齐。</p></article>
+      <article class="ms"><div class="id">T2.1</div><h3>流式 k-way merge</h3><p>MergingIterator + 块惰性 SST 迭代 + 原子 rename。</p></article>
+      <article class="ms"><div class="id">T2.3</div><h3>TableCache</h3><p>路径 LRU 复用 reader；pread 消竞态。</p></article>
+      <article class="ms"><div class="id">T2.5</div><h3>Write Stall</h3><p>immutable/L0 阈值；可选 Status::Busy。</p></article>
+      <article class="ms minimal"><div class="id">T2.6 · 最小</div><h3>引擎 /metrics</h3><p>原子计数器 + --metrics-port；scraper 探活。</p></article>
+    </div>
+
+    <h2>修改前后对比 <span>关键切片</span></h2>
+    <div class="tabs" role="tablist" aria-label="Before after milestones">
+      <button type="button" role="tab" aria-selected="true" data-tab="m1">M1 Tombstone</button>
+      <button type="button" role="tab" aria-selected="false" data-tab="m5">M5 SST</button>
+      <button type="button" role="tab" aria-selected="false" data-tab="m9">M9 Seek</button>
+      <button type="button" role="tab" aria-selected="false" data-tab="t21">T2.1 Merge</button>
+      <button type="button" role="tab" aria-selected="false" data-tab="t26">T2.6 Metrics</button>
+    </div>
+
+    <div id="m1" class="panel active" role="tabpanel">
+      <div class="col bad"><h4>Before</h4><ul>
+        <li>非底层 merge 丢 tombstone</li>
+        <li>Get 把删除当 miss → 下层复活旧值</li>
+      </ul></div>
+      <div class="col good"><h4>After</h4><ul>
+        <li>仅最底层可丢 tombstone</li>
+        <li>PointLookup 三态；同层新文件优先</li>
+      </ul></div>
+      <div class="evidence">证据：compaction.cpp · internal_key.h · CompactionTombstoneTest</div>
+    </div>
+
+    <div id="m5" class="panel" role="tabpanel">
+      <div class="col bad"><h4>Before</h4><ul>
+        <li>readBlock 失败 → nullopt / NotFound</li>
+        <li>损坏 SST 被更旧层「顶替回答」</li>
+      </ul></div>
+      <div class="col good"><h4>After</h4><ul>
+        <li>lookup 返回 Status + PointLookup</li>
+        <li>DB::get 传播 Corruption/IOError</li>
+      </ul></div>
+      <div class="evidence">证据：sstable_reader.* · SSTableCorruptionTest（含删 WAL 后 reopen）</div>
+    </div>
+
+    <div id="m9" class="panel" role="tabpanel">
+      <div class="col bad"><h4>Before</h4><ul>
+        <li>lookup 全表 entries() 线性扫</li>
+        <li>迭代器默认大向量拷贝</li>
+      </ul></div>
+      <div class="col good"><h4>After</h4><ul>
+        <li>SkipList findGreaterOrEqual O(log n)</li>
+        <li>imm 惰性游标；live MemTable 仍快照（诚实边界）</li>
+      </ul></div>
+      <div class="evidence">证据：skip_list.h · memtable.cpp · MemTableSeekTest / SkipListSeekTest</div>
+    </div>
+
+    <div id="t21" class="panel" role="tabpanel">
+      <div class="col bad"><h4>Before</h4><ul>
+        <li>merge 可能整表装入内存</li>
+        <li>SST 迭代全文件快照</li>
+      </ul></div>
+      <div class="col good"><h4>After</h4><ul>
+        <li>k-way MergingIterator 流式写出</li>
+        <li>按块惰性 SSTableIterator；tmp→fsync→rename</li>
+      </ul></div>
+      <div class="evidence">证据：compaction.cpp · sstable_iterator.* · CompactionStreamTest</div>
+    </div>
+
+    <div id="t26" class="panel" role="tabpanel">
+      <div class="col bad"><h4>Before</h4><ul>
+        <li>C++ 引擎零指标</li>
+        <li>observability 只刮 Go 层</li>
+      </ul></div>
+      <div class="col good"><h4>After（最小）</h4><ul>
+        <li>EngineMetrics + GET /metrics /healthz</li>
+        <li>scraper 探 minikv；prometheus.yml 注释更新</li>
+        <li>无延迟直方图 / Grafana JSON（诚实）</li>
+      </ul></div>
+      <div class="evidence">证据：utils/metrics.* · --metrics-port · EngineMetricsTest · scraper.go</div>
+    </div>
+
+    <h2>未做边界 <span>下一刀建议</span></h2>
+    <div class="remain">
+      <div class="box">
+        <h3>引擎 / 网络残余</h3>
+        <ul>
+          <li>M8 补齐：idle 超时、完整 backpressure</li>
+          <li>T2.6 加深：延迟直方图、Grafana dashboard JSON</li>
+          <li>live MemTable 快照隔离（当前诚实拷贝）</li>
+        </ul>
+      </div>
+      <div class="box">
+        <h3>产品层下一阶段</h3>
+        <ul>
+          <li>RAG 检索质量（非仅一致性）</li>
+          <li>Web / CLI 体验与体验</li>
+          <li>Raft / K8s：保持教学边界，勿写进简历为生产集群</li>
+        </ul>
+      </div>
+    </div>
+
+    <footer>
+      源文档：docs/industrialization-plan.md · docs/mvp-optimization-suggestions.md (v1.2) · docs/ERRORLOG.md<br />
+      仓库副本：/mnt/d/SpectrumCore/docs/industrialization-progress-2026-08-26.html<br />
+      桌面副本：C:\\Users\\Administrator\\Desktop\\industrialization-progress-2026-08-26.html
+    </footer>
+  </div>
+  <script>
+    (function () {
+      var tabs = document.querySelectorAll('[role="tab"]');
+      var panels = document.querySelectorAll('[role="tabpanel"]');
+      tabs.forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var id = btn.getAttribute('data-tab');
+          tabs.forEach(function (b) { b.setAttribute('aria-selected', b === btn ? 'true' : 'false'); });
+          panels.forEach(function (p) {
+            p.classList.toggle('active', p.id === id);
+          });
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

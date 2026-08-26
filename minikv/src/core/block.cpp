@@ -87,7 +87,7 @@ std::optional<std::string> BlockReader::get(const Slice& key) const {
     return std::nullopt;
 }
 
-std::optional<std::string> BlockReader::getByUserKey(const Slice& userKey) const {
+PointLookup BlockReader::lookupByUserKey(const Slice& userKey, std::string* value) const {
     size_t offset = 0;
     std::string lastKey;
     while (offset < restarts_offset_) {
@@ -109,14 +109,21 @@ std::optional<std::string> BlockReader::getByUserKey(const Slice& userKey) const
         Slice uk = InternalKeyUserKey(ik);
         int cmp = uk.compare(userKey);
         if (cmp == 0) {
-            if (IsDeletion(ik)) return std::nullopt;
-            return std::string(p, valLen);
+            if (IsDeletion(ik)) return PointLookup::kTombstone;
+            if (value) value->assign(p, valLen);
+            return PointLookup::kValue;
         }
-        if (cmp > 0) return std::nullopt;
+        if (cmp > 0) break;
 
         lastKey = std::move(currentKey);
-        offset = static_cast<size_t>((p - data_.data()) + valLen);
+        offset = static_cast<size_t>(p + valLen - data_.data());
     }
+    return PointLookup::kMiss;
+}
+
+std::optional<std::string> BlockReader::getByUserKey(const Slice& userKey) const {
+    std::string v;
+    if (lookupByUserKey(userKey, &v) == PointLookup::kValue) return v;
     return std::nullopt;
 }
 

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -14,6 +14,11 @@ struct Options {
     size_t lru_cache_capacity = 8 * 1024 * 1024;  // 8MB
     int max_level = 7;
     size_t level0_compaction_trigger = 4;
+    // T2.5 write stall: block writers when immutable or L0 too deep.
+    size_t max_immutable_memtables = 4;
+    size_t level0_stop_writes_trigger = 8;
+    // If true, return Status::Busy instead of blocking on stall.
+    bool write_stall_return_busy = false;
     bool wal_sync = true;
     bool bloom_filter_enabled = true;
     double bloom_false_positive_rate = 0.01;

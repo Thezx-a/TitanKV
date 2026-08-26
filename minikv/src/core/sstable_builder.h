@@ -1,7 +1,8 @@
-﻿#pragma once
+#pragma once
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 #include "core/block.h"
 #include "core/bloom_filter.h"
 #include "core/compression.h"
@@ -60,6 +61,7 @@ private:
     BlockBuilder         data_block_;
     CompressionType      compression_;
     std::unique_ptr<BloomFilter> bloom_;
+    std::vector<std::string> bloom_keys_;
     std::string          index_block_;
     std::string          last_key_;
     uint64_t             offset_      = 0;

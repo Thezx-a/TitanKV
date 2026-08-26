@@ -131,7 +131,12 @@ void Server::registerConnection(EventLoop* io, int connFd) {
         [this](const std::string& raw) { return processRequest(raw); },
         io, biz_pool_.get());
     io->addEvent(connFd, EPOLLIN, [io, conn, connFd](uint32_t events) {
-        conn->onReadable();
+        if (events & (EPOLLIN | EPOLLERR | EPOLLHUP)) {
+            conn->onReadable();
+        }
+        if (events & EPOLLOUT) {
+            conn->onWritable();
+        }
         if (conn->shouldClose() || (events & (EPOLLERR | EPOLLHUP))) {
             conn->markClosed();
             io->removeEvent(connFd);

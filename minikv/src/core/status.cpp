@@ -12,6 +12,7 @@ std::string Status::ToString() const {
         case StatusCode::kNotSupported: oss << "NotSupported: "; break;
         case StatusCode::kInvalidArgument: oss << "InvalidArgument: "; break;
         case StatusCode::kIOError: oss << "IOError: "; break;
+        case StatusCode::kBusy: oss << "Busy: "; break;
     }
     if (!msg_.empty()) oss << msg_;
     return oss.str();

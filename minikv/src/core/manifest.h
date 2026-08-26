@@ -30,16 +30,20 @@ namespace core {
 //
 // Recovery:
 //   Read records sequentially, verify CRC, apply to in-memory levels
-//   vector. A truncated tail record (CRC mismatch / short read) is dropped;
-//   this matches the "crash mid-append is safe" invariant of LSM engines.
+//   vector. A truncated/corrupt tail is dropped AND the file is ftruncated
+//   to the last good offset so later appends are not stranded ([P0-3]).
 
 class Manifest {
 public:
-    explicit Manifest(const std::string& db_path);
+    // level_count = max_level + 1 (indices 0..max_level inclusive).
+    // Default 8 matches Options::max_level=7.
+    explicit Manifest(const std::string& db_path, int level_count = 8);
     ~Manifest();
 
     // Open MANIFEST file (creating it if absent), replay records, and fix up
     // in-memory levels_. Returns IOError on filesystem failure.
+    // If on-disk level span exceeds configured_level_count_, keeps disk size
+    // and logs a warning (never silently drop SST refs).
     Status open();
 
     // Append a single AddFile record. Fsync is caller-controlled.
@@ -59,6 +63,7 @@ public:
 
     // For debugging / tests.
     const std::string& path() const { return manifest_path_; }
+    int configuredLevelCount() const { return configured_level_count_; }
 
 private:
     enum RecordType : uint8_t {
@@ -75,6 +80,7 @@ private:
 
     std::string manifest_path_;
     int        fd_ = -1;
+    int        configured_level_count_ = 8;
     std::vector<std::vector<SSTableMeta>> levels_;
     mutable std::mutex mutex_;
 };

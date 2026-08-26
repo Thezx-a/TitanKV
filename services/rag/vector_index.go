@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"math"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -145,16 +144,13 @@ type snapshotFile struct {
 // SaveSnapshot 把全量索引序列化到 path.
 func (idx *SideIndex) SaveSnapshot(path string) error {
 	idx.mu.RLock()
-	defer idx.mu.RUnlock()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	f, err := os.Create(path)
+	sf := snapshotFile{Dim: idx.dim, Vectors: idx.vectors}
+	data, err := json.Marshal(sf)
+	idx.mu.RUnlock()
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return json.NewEncoder(f).Encode(snapshotFile{Dim: idx.dim, Vectors: idx.vectors})
+	return atomicWriteFile(path, data)
 }
 
 // SaveSnapshotPrefix 只保存 chunk_id 以 prefix 开头的向量 (按 collection 分片快照).
@@ -166,16 +162,9 @@ func (idx *SideIndex) SaveSnapshotPrefix(path, prefix string) error {
 			sub[k] = v
 		}
 	}
+	dim := idx.dim
 	idx.mu.RUnlock()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	return json.NewEncoder(f).Encode(snapshotFile{Dim: idx.dim, Vectors: sub})
+	return atomicWriteJSON(path, snapshotFile{Dim: dim, Vectors: sub})
 }
 
 // LoadSnapshot 从 path 覆盖加载.

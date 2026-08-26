@@ -29,7 +29,7 @@
 - 查找: Bloom → 二分 Index → BlockCache / 读盘解压
 
 ### Compaction
-- L0→L1 处理重叠；Ln→Ln+1 归并保留最新版本；tombstone 在底层删除
+- L0→L1 处理重叠；Ln→Ln+1 归并保留最新版本；tombstone 仅在最底层（max_level）删除；非最底层保留（LevelDB 同款，非范围感知）
 
 ### MVCC
 - InternalKey = `user_key | seq | type`；全链路 string 编码 + 比较器

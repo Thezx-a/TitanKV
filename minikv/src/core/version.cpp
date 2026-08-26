@@ -7,16 +7,23 @@
 namespace minikv {
 namespace core {
 
-Version::Version() : next_file_number_(1) {
-    levels_.resize(7);
+Version::Version(int level_count) : next_file_number_(1) {
+    if (level_count < 1) level_count = 1;
+    levels_.resize(static_cast<size_t>(level_count));
 }
 
 Version::~Version() = default;
 
+void Version::ensureLevelCapacity(int level_count) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (level_count > 0 && static_cast<int>(levels_.size()) < level_count)
+        levels_.resize(static_cast<size_t>(level_count));
+}
+
 void Version::restoreFrom(const std::vector<std::vector<SSTableMeta>>& snapshot) {
     std::lock_guard<std::mutex> lock(mutex_);
     levels_ = snapshot;
-    if (levels_.size() < 7) levels_.resize(7);
+    // Do not force a magic size; caller may ensureLevelCapacity afterwards.
     // Bump next_file_number past the largest observed file number.
     uint64_t max_no = 0;
     for (const auto& lvl : levels_) {

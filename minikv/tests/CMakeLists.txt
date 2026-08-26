@@ -1,21 +1,30 @@
 add_executable(minikv_tests
     test_skip_list.cpp
     test_bloom_filter.cpp
+    test_bloom_lifecycle.cpp
     test_slice.cpp
     test_coding.cpp
     test_lru_cache.cpp
     test_wal.cpp
     test_memtable.cpp
+    test_memtable_seek.cpp
     test_compression.cpp
     test_sstable_compression.cpp
+    test_sstable_corruption.cpp
     test_manifest.cpp
     test_internal_key.cpp
     test_db_reopen.cpp
+    test_compaction_tombstone.cpp
+    test_write_stall.cpp
+    test_engine_metrics.cpp
+    test_compaction_stream.cpp
     test_block_cache.cpp
+    test_table_cache.cpp
     test_memtable_snapshot.cpp
     test_event_loop.cpp
     test_server_reactor.cpp
     test_connection_bizpool.cpp
+    test_connection_bounds.cpp
 )
 target_link_libraries(minikv_tests PRIVATE minikv GTest::gtest_main)
 apply_sanitizers(minikv_tests)

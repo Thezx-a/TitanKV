@@ -10,7 +10,8 @@
 namespace minikv {
 namespace core {
 
-// Snapshot iterator over one SSTable (keys sorted). Keeps the reader alive.
+// Block-lazy iterator over one SSTable (T2.1).
+// Loads one data block at a time — memory O(block), not O(file).
 class SSTableIterator : public Iterator {
 public:
     explicit SSTableIterator(std::shared_ptr<SSTableReader> reader);
@@ -24,11 +25,13 @@ public:
     Status status() const override;
 
 private:
-    void loadEntries();
+    bool loadBlock(size_t block_index);
+    void clearBlock();
 
     std::shared_ptr<SSTableReader> reader_;
-    std::vector<std::pair<std::string, std::string>> entries_;
-    size_t index_ = 0;
+    std::vector<std::pair<std::string, std::string>> block_entries_;
+    size_t block_index_ = 0;
+    size_t entry_index_ = 0;
     Status status_;
 };
 

@@ -39,6 +39,7 @@ func NewService(cfg Config) (*Service, error) {
 
 	idx := NewVectorIndex(emb.Dim(), cfg.IndexType)
 	loadAllSnapshots(cfg.IndexDir, idx)
+	maybeRebuildIfEmpty(context.Background(), store, emb, idx)
 
 	chunker := NewChunker(512, 64)
 	ing := NewIngester(store, chunker, emb, idx, cfg)
@@ -181,6 +182,14 @@ func (s *Service) DeleteDocument(c *gin.Context) {
 		return
 	}
 	s.index.ClearByPrefix(col + "/" + doc + "/")
+	// M10: rewrite collection snapshot so restart does not resurrect vectors.
+	if snap, ok := s.index.(SnapshotStore); ok && s.cfg.IndexDir != "" {
+		path := filepath.Join(s.cfg.IndexDir, col+".idx")
+		if err := snap.SaveSnapshotPrefix(path, col+"/"); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "index snapshot: " + err.Error()})
+			return
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 

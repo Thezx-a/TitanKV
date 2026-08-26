@@ -56,6 +56,50 @@
       </div>
     </div>
 
+    <figure class="layer-banner">
+      <img alt="Next.js 控制台概念图" src="https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=Minimalist%20editorial%20illustration%20of%20a%20modern%20web%20dashboard%20console%20warm%20cream%20beige%20background%20deep%20navy%20blue%20browser%20window%20with%20sidebar%20navigation%20and%20data%20charts%20flowing%20lines%20connecting%20to%20a%20backend%20server%20block%20soft%20slate%20gray%20accents%20clean%20geometric%20flat%20design%20elegant%20no%20text%20no%20words%20no%20letters&image_size=landscape_16_9" />
+    </figure>
+
+    <h2>前端请求链路 · 从浏览器到后端</h2>
+
+    <div class="vflow">
+      <div class="vstep"><div class="vnode">1</div><div class="vbody">
+        <p class="vtitle">用户访问 /dashboard/* <span class="vtag safe">browser</span></p>
+        <p class="vdesc">浏览器请求 Next.js 路由，先过 <code>middleware.ts</code> 校验 <code>titan_token</code> cookie。</p>
+        <p class="vdetail"><strong>崩溃点 A：</strong>无 cookie / token 失效 → middleware 重定向到 <code>/login</code>。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">2</div><div class="vbody">
+        <p class="vtitle">RSC 渲染 + apiFetch 调用 <span class="vtag safe">app/*</span></p>
+        <p class="vdesc">React Server Component 渲染页面，客户端用 <code>apiFetch</code> 或 TanStack Query 调后端 API。</p>
+        <p class="vdetail"><strong>崩溃点 B：</strong>后端 5xx → apiFetch 抛 HttpError，TanStack Query 捕获并展示错误 toast。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">3</div><div class="vbody">
+        <p class="vtitle">apiFetch · 自动注入 Bearer <span class="vtag safe">lib/api.ts</span></p>
+        <p class="vdesc">读 <code>titan_token</code> cookie → 注入 <code>Authorization: Bearer</code> → fetch 后端 Gateway。</p>
+        <p class="vdetail"><strong>崩溃点 C：</strong>401 → 清 cookie + 跳 <code>/login</code>（仅浏览器端，不在登录页时）。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">4</div><div class="vbody">
+        <p class="vtitle">TanStack Query · 数据获取与缓存 <span class="vtag safe">components/providers</span></p>
+        <p class="vdesc">声明式 useQuery / useMutation，自动缓存 + 失效重取 + 乐观更新。</p>
+        <p class="vdetail"><strong>崩溃点 D：</strong>请求失败 → TanStack 自动重试 3 次（默认），仍失败则展示错误状态。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">5</div><div class="vbody">
+        <p class="vtitle">RAG chat · SSE 流式渲染 <span class="vtag warn">lib/rag.ts</span></p>
+        <p class="vdesc">用户提交问题 → 后端 LLM 逐 token 返回 → 前端 EventSource 解析 → 累加渲染到对话框。</p>
+        <p class="vdetail"><strong>崩溃点 E：</strong>SSE 流中途断 → 已渲染部分保留，前端提示"中断"，用户可重新提问。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">6</div><div class="vbody">
+        <p class="vtitle">live-metrics · 实时指标 <span class="vtag safe">components/live-metrics</span></p>
+        <p class="vdesc">仪表盘首页用 SSE 或轮询展示实时指标（QPS / 延迟 / 错误率）。</p>
+        <p class="vdetail"><strong>崩溃点 F：</strong>指标流断 → 回退到轮询模式，UI 提示"实时数据暂停"。</p>
+      </div></div>
+    </div>
+
     <h2>目录结构</h2>
     <div class="arch-diagram">web/
 ├── app/                          # App Router
@@ -209,6 +253,290 @@ make web-build     # npm run build</code></pre>
     ├── api.ts          apiFetch + JWT cookie
     ├── rag.ts          upload/retrieve/chatStream
     └── types.ts        RagCollectionConfig 等</code></pre>
+
+    <section class="analysis" id="analysis">
+      <h2>设计深度分析</h2>
+      <p class="lead">前端控制台是用户最直接感知的层。本节覆盖崩溃恢复、Next.js App Router vs Pages Router、TanStack Query vs SWR、SSE vs WebSocket、cookie vs localStorage 等核心议题。</p>
+
+      <h3>1. 崩溃恢复 · 六种前端场景</h3>
+      <div class="scenario-grid">
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">CASE A</span><span class="stitle">middleware 拦截未认证</span></div>
+          <p class="sbody">用户未登录访问 <code>/dashboard/*</code>，middleware 重定向到 <code>/login</code>。用户体验稍差但安全。</p>
+          <span class="sresult warn">语义：强制重新登录</span>
+        </div>
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">CASE B</span><span class="stitle">后端 5xx 错误</span></div>
+          <p class="sbody">apiFetch 抛 HttpError，TanStack Query 捕获并展示错误 toast；用户可手动重试。</p>
+          <span class="sresult warn">语义：可重试 · 用户感知到错误</span>
+        </div>
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">CASE C</span><span class="stitle">JWT 过期 401</span></div>
+          <p class="sbody">apiFetch 检测 401 → 清 cookie + 跳 <code>/login</code>。用户重新登录后回到原页面（可加 redirect 参数）。</p>
+          <span class="sresult ok">语义：可恢复 · 重新认证</span>
+        </div>
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">CASE D</span><span class="stitle">TanStack Query 重试</span></div>
+          <p class="sbody">请求失败默认重试 3 次，瞬时故障对用户无感；仍失败则展示错误 UI。</p>
+          <span class="sresult ok">语义：可恢复 · 自动兜底</span>
+        </div>
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">CASE E</span><span class="stitle">RAG SSE 流中断</span></div>
+          <p class="sbody">流式响应中途断开，已渲染部分保留，前端提示"中断"。用户可重新提问（chat 是新会话）。</p>
+          <span class="sresult warn">语义：部分结果 · 可重试</span>
+        </div>
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">CASE F</span><span class="stitle">实时指标流断</span></div>
+          <p class="sbody">SSE 流断开 → 回退到轮询模式，UI 提示"实时数据暂停"。指标数据不会全丢。</p>
+          <span class="sresult ok">语义：可降级 · 轮询兜底</span>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">为什么这样设计？</span>
+        <strong>核心权衡：</strong>前端是用户感知层，所有崩溃必须<strong>有视觉反馈</strong>而非静默失败。错误 toast + 重试 + 重定向登录是黄金组合。代价是：用户在故障期间会频繁看到错误提示，体验降级。
+      </div>
+
+      <h3>2. Next.js 14 App Router vs Pages Router · 为什么选 App Router</h3>
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>App Router (本项目)</th><th>Pages Router</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>路由</strong></td>
+            <td class="win">文件系统 + layout 嵌套</td>
+            <td>扁平 _app/_document</td>
+          </tr>
+          <tr>
+            <td><strong>渲染</strong></td>
+            <td class="win">RSC + Client 混合， streaming</td>
+            <td>SSR / SSG / CSR，无 streaming</td>
+          </tr>
+          <tr>
+            <td><strong>数据获取</strong></td>
+            <td class="win">Server Component 直接 fetch</td>
+            <td>getServerSideProps / getStaticProps</td>
+          </tr>
+          <tr>
+            <td><strong>布局复用</strong></td>
+            <td class="win">layout.tsx 嵌套不重渲染</td>
+            <td>_app 全局重渲染</td>
+          </tr>
+          <tr>
+            <td><strong>学习成本</strong></td>
+            <td>RSC 概念新，需理解 Server/Client 边界</td>
+            <td class="win">简单直观</td>
+          </tr>
+          <tr>
+            <td><strong>生态成熟度</strong></td>
+            <td>14 后稳定，部分库未适配</td>
+            <td class="win">多年沉淀，全生态支持</td>
+          </tr>
+        </tbody>
+      </table>
+      <p><strong>结论：</strong>App Router 是 Next.js 未来方向，layout 嵌套不重渲染对管理控制台场景特别友好（侧边栏固定）。学习成本可接受。</p>
+
+      <h3>3. TanStack Query vs SWR vs 原生 fetch · 数据层选型</h3>
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>TanStack Query (本项目)</th><th>SWR</th><th>原生 fetch</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>缓存</strong></td>
+            <td class="win">queryKey + 失效控制精细</td>
+            <td>key-based，简单</td>
+            <td>无</td>
+          </tr>
+          <tr>
+            <td><strong>乐观更新</strong></td>
+            <td class="win">onMutate 回调，强</td>
+            <td>mutate 简单</td>
+            <td>无</td>
+          </tr>
+          <tr>
+            <td><strong>DevTools</strong></td>
+            <td class="win">官方 DevTools，可视化</td>
+            <td>第三方</td>
+            <td>无</td>
+          </tr>
+          <tr>
+            <td><strong>无限查询</strong></td>
+            <td class="win">useInfiniteQuery 原生</td>
+            <td>useSWRInfinite</td>
+            <td>需手写</td>
+          </tr>
+          <tr>
+            <td><strong>包大小</strong></td>
+            <td>~13KB</td>
+            <td class="win">~4KB</td>
+            <td class="win">0</td>
+          </tr>
+          <tr>
+            <td><strong>学习成本</strong></td>
+            <td>API 丰富，需学</td>
+            <td class="win">极简</td>
+            <td class="win">零</td>
+          </tr>
+        </tbody>
+      </table>
+      <p><strong>结论：</strong>TanStack Query 功能最全，管理控制台场景需要乐观更新 + 无限查询 + DevTools，包大小可接受。SWR 适合轻量场景，原生 fetch 适合无状态请求。</p>
+
+      <h3>4. SSE 流式 vs WebSocket · 为什么 RAG chat 用 SSE</h3>
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>SSE (本项目 RAG chat)</th><th>WebSocket</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>通信方向</strong></td>
+            <td>服务端→客户端单向</td>
+            <td class="win">双向</td>
+          </tr>
+          <tr>
+            <td><strong>协议</strong></td>
+            <td class="win">HTTP/1.1，自动重连</td>
+            <td>需 Upgrade 握手</td>
+          </tr>
+          <tr>
+            <td><strong>代理友好</strong></td>
+            <td class="win">普通 HTTP 透传</td>
+            <td>需支持 Upgrade</td>
+          </tr>
+          <tr>
+            <td><strong>断线重连</strong></td>
+            <td class="win">EventSource 内置</td>
+            <td>需手写</td>
+          </tr>
+          <tr>
+            <td><strong>典型场景</strong></td>
+            <td class="win">LLM 流式输出、通知推送</td>
+            <td>聊天、协同编辑</td>
+          </tr>
+          <tr>
+            <td><strong>连接数上限</strong></td>
+            <td>HTTP/1.1 同域 6 个</td>
+            <td class="win">无限制</td>
+          </tr>
+        </tbody>
+      </table>
+      <p><strong>结论：</strong>RAG chat 是单向流式输出（LLM → 用户），SSE 协议简单 + 自动重连 + 代理友好。双向聊天才需 WebSocket。</p>
+
+      <h3>5. cookie httpOnly vs localStorage · 为什么 JWT 存 cookie</h3>
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>httpOnly cookie (本项目)</th><th>localStorage</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>XSS 偷 token</strong></td>
+            <td class="win">JS 读不到</td>
+            <td>localStorage.getItem 可读</td>
+          </tr>
+          <tr>
+            <td><strong>CSRF</strong></td>
+            <td>需 SameSite 缓解</td>
+            <td class="win">不带 cookie，免疫</td>
+          </tr>
+          <tr>
+            <td><strong>自动携带</strong></td>
+            <td class="win">同源自动带</td>
+            <td>需手动注入 header</td>
+          </tr>
+          <tr>
+            <td><strong>跨域</strong></td>
+            <td>需 credentials: include + CORS</td>
+            <td class="win">无跨域限制</td>
+          </tr>
+          <tr>
+            <td><strong>容量</strong></td>
+            <td>4KB</td>
+            <td class="win">5MB+</td>
+          </tr>
+          <tr>
+            <td><strong>过期控制</strong></td>
+            <td class="win">max-age 自动</td>
+            <td>需手写定时清理</td>
+          </tr>
+        </tbody>
+      </table>
+      <p><strong>结论：</strong>httpOnly cookie 防 XSS 偷 token，是最安全默认。CSRF 用 SameSite=Strict 缓解。同源场景 cookie 是最佳选择。</p>
+
+      <h3>6. middleware.ts vs 客户端鉴权 · 为什么在路由层校验</h3>
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>middleware.ts (本项目)</th><th>客户端 useEffect 校验</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>执行时机</strong></td>
+            <td class="win">请求到达页面前</td>
+            <td>页面渲染后才校验</td>
+          </tr>
+          <tr>
+            <td><strong>跳转体验</strong></td>
+            <td class="win">无闪烁，直接重定向</td>
+            <td>白屏后跳转，闪烁</td>
+          </tr>
+          <tr>
+            <td><strong>安全</strong></td>
+            <td class="win">服务端校验，无法绕过</td>
+            <td>客户端可被篡改</td>
+          </tr>
+          <tr>
+            <td><strong>性能</strong></td>
+            <td>每个请求过 middleware</td>
+            <td class="win">仅客户端执行</td>
+          </tr>
+          <tr>
+            <td><strong>能力</strong></td>
+            <td>Edge runtime，受限 API</td>
+            <td class="win">完整 React 生态</td>
+          </tr>
+        </tbody>
+      </table>
+      <p><strong>结论：</strong>middleware 在路由层校验 cookie，无闪烁 + 不可绕过。Edge runtime API 受限但够用（读 cookie + 重定向）。客户端鉴权可作为补充（页面内权限判断）。</p>
+
+      <h3>7. 总体优缺点与优化路线</h3>
+      <div class="procon">
+        <div class="pros">
+          <h4>当前设计优点</h4>
+          <ul>
+            <li>Next.js 14 App Router 是最新方向，layout 嵌套不重渲染</li>
+            <li>apiFetch 统一封装，鉴权 + 错误处理集中</li>
+            <li>TanStack Query 缓存 + 重试 + 乐观更新，开发体验好</li>
+            <li>SSE 流式 RAG chat，体验流畅</li>
+            <li>cookie httpOnly + middleware，安全默认</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>当前设计缺点</h4>
+          <ul>
+            <li>无 SSR 数据预取，首屏白屏</li>
+            <li>无 PWA / 离线能力</li>
+            <li>无 i18n 国际化</li>
+            <li>无 E2E 测试（Playwright）</li>
+            <li>TanStack Query 重试无指数退避</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">优化路线（按优先级）</span>
+        <strong>P0 · SSR 数据预取：</strong>Server Component 直接 fetch，首屏不白屏；<br>
+        <strong>P1 · TanStack Query 指数退避：</strong>避免重试雪崩；<br>
+        <strong>P1 · PWA + Service Worker：</strong>离线访问 + 推送通知；<br>
+        <strong>P2 · i18n：</strong>next-intl 多语言支持；<br>
+        <strong>P2 · Playwright E2E：</strong>关键流程自动化测试；<br>
+        <strong>P3 · React Server Actions：</strong>替代部分 API 调用，减少客户端 JS。
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">为什么这个层是 L8？</span>
+        L8 前端 → L1 客户端 → L2 网络库 → ... → L7 可观测性。前端层在最末端，是人类感知系统的窗口。它<strong>关键约束</strong>是：所有崩溃必须有视觉反馈，所有数据必须有缓存与重试。它通过 Gateway 调用后端，不感知分布式与存储细节。详见 <a href="client.html#analysis">客户端设计分析</a> 与 <a href="gateway.html#analysis">网关设计分析</a>。
+      </div>
+    </section>
 
   </main>
 </div>

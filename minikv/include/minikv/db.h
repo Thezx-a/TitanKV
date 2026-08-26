@@ -22,6 +22,9 @@ public:
     virtual void compact() = 0;
     // Block until all pending MemTable flushes finish (tests + graceful shutdown).
     virtual void waitFlush() = 0;
+    // Block until background compaction has drained triggered work and no
+    // level currently exceeds its file-count trigger (tests + admin).
+    virtual void waitCompaction() = 0;
 };
 
 }  // namespace minikv

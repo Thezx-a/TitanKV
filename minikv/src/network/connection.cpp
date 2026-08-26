@@ -1,7 +1,8 @@
 ﻿#include "network/connection.h"
 #include <cerrno>
-#include <unistd.h>
 #include <cstring>
+#include <unistd.h>
+#include <sys/epoll.h>
 #include "network/event_loop.h"
 #include "network/protocol.h"
 #include "utils/thread_pool.h"
@@ -25,6 +26,26 @@ Connection::~Connection() {
 
 void Connection::markClosed() { close_ = true; }
 
+bool Connection::checkRequestBounds(size_t total_size) {
+    if (total_size < sizeof(RequestHeader) || total_size > kMaxRequestSize) {
+        close_ = true;
+        return false;
+    }
+    return true;
+}
+
+void Connection::enableWriteInterest() {
+    if (!loop_ || writing_ || close_) return;
+    writing_ = true;
+    loop_->updateEvent(fd_, EPOLLIN | EPOLLOUT);
+}
+
+void Connection::disableWriteInterest() {
+    if (!loop_ || !writing_) return;
+    writing_ = false;
+    loop_->updateEvent(fd_, EPOLLIN);
+}
+
 void Connection::onReadable() {
     char buf[4096];
     ssize_t n = ::read(fd_, buf, sizeof(buf));
@@ -38,6 +59,10 @@ void Connection::onReadable() {
         return;
     }
     read_buf_.append(buf, n);
+    if (read_buf_.size() > kMaxRequestSize) {
+        close_ = true;
+        return;
+    }
 
     if (pool_ && loop_) {
         tryDispatch();
@@ -50,13 +75,20 @@ void Connection::onReadable() {
             close_ = true;
             return;
         }
-        size_t totalSize = sizeof(RequestHeader) + hdr->key_len + hdr->val_len;
+        size_t totalSize = sizeof(RequestHeader) +
+                           static_cast<size_t>(hdr->key_len) +
+                           static_cast<size_t>(hdr->val_len);
+        if (!checkRequestBounds(totalSize)) return;
         if (read_buf_.size() < totalSize) break;
 
         std::string rawData = read_buf_.substr(0, totalSize);
         read_buf_.erase(0, totalSize);
         std::string response = handler_(rawData);
         write_buf_.append(response);
+        if (write_buf_.size() > kMaxWriteBuffer) {
+            close_ = true;
+            return;
+        }
     }
     if (!write_buf_.empty()) onWritable();
 }
@@ -70,7 +102,10 @@ void Connection::tryDispatch() {
         close_ = true;
         return;
     }
-    size_t totalSize = sizeof(RequestHeader) + hdr->key_len + hdr->val_len;
+    size_t totalSize = sizeof(RequestHeader) +
+                       static_cast<size_t>(hdr->key_len) +
+                       static_cast<size_t>(hdr->val_len);
+    if (!checkRequestBounds(totalSize)) return;
     if (read_buf_.size() < totalSize) return;
 
     std::string rawData = read_buf_.substr(0, totalSize);
@@ -86,7 +121,11 @@ void Connection::tryDispatch() {
         self->loop_->queueInLoop([self, response = std::move(response)] {
             if (!self->close_) {
                 self->write_buf_.append(response);
-                self->onWritable();
+                if (self->write_buf_.size() > kMaxWriteBuffer) {
+                    self->close_ = true;
+                } else {
+                    self->onWritable();
+                }
             }
             self->in_flight_ = false;
             if (!self->close_) self->tryDispatch();
@@ -101,9 +140,14 @@ void Connection::onWritable() {
             write_buf_.erase(0, static_cast<size_t>(n));
             continue;
         }
-        // EAGAIN / short write: caller should wait for EPOLLOUT.
-        break;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+            enableWriteInterest();
+            return;
+        }
+        close_ = true;
+        return;
     }
+    disableWriteInterest();
 }
 
 }  // namespace network

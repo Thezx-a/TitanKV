@@ -1,4 +1,4 @@
-﻿#include "core/sstable_reader.h"
+#include "core/sstable_reader.h"
 #include "core/block_cache.h"
 
 #include <fcntl.h>
@@ -15,6 +15,11 @@
 
 namespace minikv {
 namespace core {
+
+namespace {
+constexpr uint32_t kMaxBlockPayload      = 64u << 20;  // 64 MiB
+constexpr uint32_t kMaxBlockUncompressed = 64u << 20;
+}  // namespace
 
 std::unique_ptr<SSTableReader> SSTableReader::open(const std::string& path,
                                                    BlockCache* cache) {
@@ -43,13 +48,23 @@ std::unique_ptr<SSTableReader> SSTableReader::open(const std::string& path,
     reader->index_offset_ = utils::decodeFixed64(footer);
     reader->index_size_   = utils::decodeFixed64(footer + 8);
 
+    if (reader->index_offset_ > reader->file_size_ ||
+        reader->index_size_ > reader->file_size_ - reader->index_offset_)
+        return nullptr;
+
     ::lseek(reader->fd_, reader->index_offset_, SEEK_SET);
     char idxHeader[8];
     if (::read(reader->fd_, idxHeader, 8) != 8) return nullptr;
+    uint32_t idxCrc = utils::decodeFixed32(idxHeader);
     uint32_t idxLen = utils::decodeFixed32(idxHeader + 4);
+    if (idxLen > kMaxBlockPayload) return nullptr;
+    if (static_cast<uint64_t>(8) + idxLen > reader->index_size_) return nullptr;
     reader->index_data_.resize(idxLen);
     if (::read(reader->fd_, reader->index_data_.data(), idxLen) != static_cast<ssize_t>(idxLen))
         return nullptr;
+    uint32_t actualIdxCrc = utils::crc32c(reader->index_data_.data(),
+                                          static_cast<int>(idxLen));
+    if (actualIdxCrc != idxCrc) return nullptr;
 
     size_t offset = 0;
     while (offset < reader->index_data_.size()) {
@@ -73,9 +88,25 @@ std::unique_ptr<SSTableReader> SSTableReader::open(const std::string& path,
     return reader;
 }
 
+
+Status SSTableReader::readDataBlock(size_t i, std::string* out) const {
+    if (i >= index_entries_.size())
+        return Status::InvalidArgument("data block index out of range");
+    return readBlock(index_entries_[i].handle, out);
+}
+
+SSTableReader::~SSTableReader() {
+    if (fd_ >= 0) {
+        ::close(fd_);
+        fd_ = -1;
+    }
+}
+
 Status SSTableReader::readBlock(const BlockHandle& h, std::string* out) const {
     if (h.size < kSSTableBlockHeader)
         return Status::Corruption("SSTable block handle size too small");
+    if (h.offset > file_size_ || h.size > file_size_ - h.offset)
+        return Status::Corruption("SSTable block handle out of file bounds");
 
     if (block_cache_) {
         BlockCacheKey key{path_, h.offset};
@@ -85,9 +116,10 @@ Status SSTableReader::readBlock(const BlockHandle& h, std::string* out) const {
         }
     }
 
-    ::lseek(fd_, static_cast<off_t>(h.offset), SEEK_SET);
+    // pread: TableCache shares one reader across threads; lseek+read races (T2.3).
     char hdr[kSSTableBlockHeader];
-    if (::read(fd_, hdr, kSSTableBlockHeader) != static_cast<ssize_t>(kSSTableBlockHeader))
+    if (::pread(fd_, hdr, kSSTableBlockHeader, static_cast<off_t>(h.offset)) !=
+        static_cast<ssize_t>(kSSTableBlockHeader))
         return Status::IOError("failed to read block header");
 
     uint32_t           crc              = utils::decodeFixed32(hdr);
@@ -96,13 +128,21 @@ Status SSTableReader::readBlock(const BlockHandle& h, std::string* out) const {
     CompressionType    type             = static_cast<CompressionType>(
                                             static_cast<uint8_t>(hdr[12]));
 
+    if (payload_size > kMaxBlockPayload || uncompressed_sz > kMaxBlockUncompressed)
+        return Status::Corruption("SSTable block size exceeds limit");
+    if (static_cast<uint64_t>(kSSTableBlockHeader) + payload_size > h.size)
+        return Status::Corruption("SSTable block payload exceeds handle size");
+
     if (payload_size == 0) {
         out->clear();
         return Status::Ok();
     }
 
-    std::string payload(payload_size, '\0');
-    if (::read(fd_, payload.data(), payload_size) != static_cast<ssize_t>(payload_size))
+    std::string payload;
+    payload.resize(payload_size);
+    off_t payload_off = static_cast<off_t>(h.offset + kSSTableBlockHeader);
+    if (::pread(fd_, payload.data(), payload_size, payload_off) !=
+        static_cast<ssize_t>(payload_size))
         return Status::IOError("failed to read block payload");
 
     uint32_t actual = utils::crc32c(payload.data(), static_cast<int>(payload_size));
@@ -117,25 +157,35 @@ Status SSTableReader::readBlock(const BlockHandle& h, std::string* out) const {
     return ds;
 }
 
-std::optional<std::string> SSTableReader::get(const Slice& userKey) const {
-    if (index_entries_.empty()) return std::nullopt;
-    if (bloom_ && !bloom_->mightContain(userKey)) return std::nullopt;
+Status SSTableReader::lookup(const Slice& userKey, std::string* value,
+                             PointLookup* out) const {
+    *out = PointLookup::kMiss;
+    if (index_entries_.empty()) return Status::Ok();
+    if (bloom_ && !bloom_->mightContain(userKey)) return Status::Ok();
 
-    // First index entry whose last user key is >= search key.
     auto it = std::lower_bound(
         index_entries_.begin(), index_entries_.end(), userKey.toString(),
         [](const IndexEntry& e, const std::string& k) {
             Slice lastUK = InternalKeyUserKey(Slice(e.last_key));
             return lastUK.compare(Slice(k)) < 0;
         });
-    if (it == index_entries_.end()) return std::nullopt;
+    if (it == index_entries_.end()) return Status::Ok();
 
     std::string block;
     Status s = readBlock(it->handle, &block);
-    if (!s.ok()) return std::nullopt;
+    if (!s.ok()) return s;
 
     BlockReader reader{Slice(block)};
-    return reader.getByUserKey(userKey);
+    *out = reader.lookupByUserKey(userKey, value);
+    return Status::Ok();
+}
+
+std::optional<std::string> SSTableReader::get(const Slice& userKey) const {
+    std::string v;
+    PointLookup pl = PointLookup::kMiss;
+    Status s = lookup(userKey, &v, &pl);
+    if (!s.ok() || pl != PointLookup::kValue) return std::nullopt;
+    return v;
 }
 
 Status SSTableReader::scan(const Slice& start, const Slice& end,

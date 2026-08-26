@@ -55,6 +55,56 @@
       </div>
     </div>
 
+    <figure class="layer-banner">
+      <img alt="可观测性三支柱概念图" src="https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=Minimalist%20editorial%20illustration%20of%20observability%20three%20pillars%20warm%20cream%20beige%20background%20deep%20navy%20blue%20three%20vertical%20columns%20representing%20metrics%20tracing%20and%20logging%20connected%20by%20flowing%20lines%20to%20a%20central%20dashboard%20block%20soft%20slate%20gray%20accents%20clean%20geometric%20flat%20design%20elegant%20no%20text%20no%20words%20no%20letters&image_size=landscape_16_9" />
+    </figure>
+
+    <h2>可观测性三支柱 · 横切调用流程</h2>
+
+    <div class="vflow">
+      <div class="vstep"><div class="vnode">1</div><div class="vbody">
+        <p class="vtitle">RequestID 生成 <span class="vtag safe">gateway/request_id.go</span></p>
+        <p class="vdesc">网关洋葱链第一层生成 uuid，写入 <code>X-Request-ID</code> 头 + <code>c.Set("request_id")</code>，串联后续日志与 Jaeger trace。</p>
+        <p class="vdetail"><strong>崩溃点 A：</strong>网关未生成 RequestID → 后端无法串联日志；可在后端 fallback 自生成。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">2</div><div class="vbody">
+        <p class="vtitle">指标埋点 · GinMiddleware <span class="vtag safe">pkg/metrics</span></p>
+        <p class="vdesc">每个 Go 服务挂 <code>metrics.GinMiddleware("svc")</code>，自动记录请求计数 / 延迟分布，写到本地 prometheus registry。</p>
+        <p class="vdetail"><strong>崩溃点 B：</strong>埋点失败（registry 满）→ 中间件吞错继续处理，不影响业务。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">3</div><div class="vbody">
+        <p class="vtitle">/metrics 暴露 <span class="vtag safe">metrics.go</span></p>
+        <p class="vdesc">服务在 <code>/metrics</code> 路由暴露 prometheus exposition format，等 Prometheus scrape。</p>
+        <p class="vdetail"><strong>崩溃点 C：</strong>/metrics 端点未挂或服务崩 → Prometheus 抓取失败，UI 显示空；不影响业务请求。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">4</div><div class="vbody">
+        <p class="vtitle">Prometheus 抓取 <span class="vtag warn">prometheus.yml</span></p>
+        <p class="vdesc">Prometheus 按 scrape_configs 周期（默认 15s）拉取所有服务的 /metrics，存入本地 TSDB。</p>
+        <p class="vdetail"><strong>崩溃点 D：</strong>抓取超时或 4xx/5xx → Prometheus 标记 target down，告警触发；存量指标不丢。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">5</div><div class="vbody">
+        <p class="vtitle">Jaeger trace 透传 <span class="vtag safe">middleware</span></p>
+        <p class="vdesc">RequestID 作为 trace_id 透传到下游服务，每个微服务在出站请求注入 trace header，Jaeger 自动关联成调用链。</p>
+        <p class="vdetail"><strong>崩溃点 E：</strong>下游未透传 trace → 链路断裂，Jaeger 显示不完整；不影响业务。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">6</div><div class="vbody">
+        <p class="vtitle">Grafana 可视化 <span class="vtag safe">:3001</span></p>
+        <p class="vdesc">以 Prometheus 为数据源，构建 QPS / 延迟分位 / 错误率 / 业务规模等仪表盘。</p>
+        <p class="vdetail"><strong>崩溃点 F：</strong>Grafana 不可达 → 仅影响人看图，不影响系统运行。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">7</div><div class="vbody">
+        <p class="vtitle">Redis · 限流 + jti 黑名单 <span class="vtag warn">:6379</span></p>
+        <p class="vdesc">令牌桶限流 + JWT jti 黑名单，Redis 故障时降级（限流放开 / 黑名单忽略）保证业务可用。</p>
+        <p class="vdetail"><strong>崩溃点 G：</strong>Redis 挂 → 限流降级为无限制，黑名单失效（已登出 token 暂时可用）；需监控 + 快速恢复。</p>
+      </div></div>
+    </div>
+
     <h2>可观测性三支柱</h2>
     <div class="arch-diagram">┌────────────────────────────────────────────────────────────────┐
 │  Metrics（指标）        │  Tracing（追踪）         │  Logging（日志）        │
@@ -169,6 +219,289 @@ services/observability/
 deploy/dev/
 ├── docker-compose.yml  Postgres/Redis/etcd/Jaeger/Prometheus/Grafana
 └── prometheus.yml      scrape 配置</code></pre>
+
+    <section class="analysis" id="analysis">
+      <h2>设计深度分析</h2>
+      <p class="lead">可观测性不是功能层，而是横切所有层的"神经系统"。本节覆盖崩溃恢复、Prometheus vs InfluxDB、Jaeger vs Zipkin、Redis 限流降级、采样策略等核心议题。</p>
+
+      <h3>1. 崩溃恢复 · 七种场景</h3>
+      <div class="scenario-grid">
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">CASE A</span><span class="stitle">RequestID 缺失</span></div>
+          <p class="sbody">后端 fallback 自生成 uuid，仅丢失跨服务串联能力。业务请求正常处理。</p>
+          <span class="sresult ok">语义：可降级 · 追踪能力降级</span>
+        </div>
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">CASE B</span><span class="stitle">指标埋点失败</span></div>
+          <p class="sbody">中间件吞错继续处理，不影响业务请求。Grafana 上对应指标短暂缺失。</p>
+          <span class="sresult ok">语义：可降级 · 仅监控盲区</span>
+        </div>
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">CASE C</span><span class="stitle">/metrics 端点不可达</span></div>
+          <p class="sbody">Prometheus 抓取失败，UI 显示 target down。存量指标不丢，告警触发。</p>
+          <span class="sresult warn">语义：监控盲区 · 不影响业务</span>
+        </div>
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">CASE D</span><span class="stitle">Prometheus 抓取超时</span></div>
+          <p class="sbody">网络抖动或服务慢，Prometheus 标记 target down 但不丢存量数据。15s 后下次抓取恢复。</p>
+          <span class="sresult warn">语义：可恢复 · 短暂盲区</span>
+        </div>
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">CASE E</span><span class="stitle">trace 透传断裂</span></div>
+          <p class="sbody">下游未透传 trace header，Jaeger 链路不完整，但业务请求正常。</p>
+          <span class="sresult ok">语义：可降级 · 链路追踪能力降级</span>
+        </div>
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">CASE F</span><span class="stitle">Grafana 不可达</span></div>
+          <p class="sbody">仅影响人看仪表盘，不影响系统运行。数据仍在 Prometheus 里。</p>
+          <span class="sresult ok">语义：无损 · 仅 UI 不可见</span>
+        </div>
+        <div class="scenario danger">
+          <div class="shead"><span class="snum">CASE G</span><span class="stitle">Redis 故障</span></div>
+          <p class="sbody">限流降级为无限制（防误杀业务），jti 黑名单失效（已登出 token 暂时可用）。需快速恢复 + 监控告警。</p>
+          <span class="sresult warn">语义：安全降级 · 攻击窗口扩大</span>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">为什么这样设计？</span>
+        <strong>核心权衡：</strong>可观测性栈的故障<strong>绝不能影响业务</strong>。所有埋点、抓取、可视化都设计成"失败降级"而非"失败阻塞"——Redis 挂时限流放开而非拒绝请求，Prometheus 挂时只影响看图不影响请求。代价是：故障期间监控盲区 + 安全降级窗口。
+      </div>
+
+      <h3>2. Prometheus vs InfluxDB vs OpenTSDB · 指标库选型</h3>
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>Prometheus (本项目)</th><th>InfluxDB</th><th>OpenTSDB</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>数据模型</strong></td>
+            <td class="win">多维 label，pull 模型</td>
+            <td>tag + field，push 模型</td>
+            <td>tag + value，push 模型</td>
+          </tr>
+          <tr>
+            <td><strong>查询语言</strong></td>
+            <td class="win">PromQL，简洁强大</td>
+            <td>Flux / InfluxQL，复杂</td>
+            <td>类 SQL，简单但功能少</td>
+          </tr>
+          <tr>
+            <td><strong>抓取方式</strong></td>
+            <td class="win">主动 pull，对服务无压力</td>
+            <td>被动 push，需 agent</td>
+            <td>被动 push，需 agent</td>
+          </tr>
+          <tr>
+            <td><strong>生态</strong></td>
+            <td class="win">CNCF 标准，Grafana 一键集成</td>
+            <td>自有可视化工具</td>
+            <td>Hadoop 生态，老旧</td>
+          </tr>
+          <tr>
+            <td><strong>长期存储</strong></td>
+            <td>需 Thanus / Cortex 扩展</td>
+            <td class="win">原生支持</td>
+            <td class="win">原生支持 HBase</td>
+          </tr>
+        </tbody>
+      </table>
+      <p><strong>结论：</strong>Prometheus 是 CNCF 事实标准，Pull 模型对服务无侵入，PromQL 表达力强，Grafana 集成最佳。长期存储需 Thanus 扩展，但本项目数据量小暂不需要。</p>
+
+      <h3>3. Jaeger vs Zipkin vs SkyWalking · 链路追踪选型</h3>
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>Jaeger (本项目)</th><th>Zipkin</th><th>SkyWalking</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>协议</strong></td>
+            <td class="win">OpenTelemetry 标准</td>
+            <td>自有 B3 协议</td>
+            <td>自有协议</td>
+          </tr>
+          <tr>
+            <td><strong>侵入性</strong></td>
+            <td class="win">SDK + OpenTelemetry</td>
+            <td>SDK</td>
+            <td class="win">字节码增强，零侵入</td>
+          </tr>
+          <tr>
+            <td><strong>生态</strong></td>
+            <td class="win">CNCF 标准</td>
+            <td>Spring 生态强</td>
+            <td>Apache 项目，中文友好</td>
+          </tr>
+          <tr>
+            <td><strong>性能</strong></td>
+            <td class="win">高，采样可调</td>
+            <td>中</td>
+            <td>高，但 JVM agent 重</td>
+          </tr>
+          <tr>
+            <td><strong>UI</strong></td>
+            <td class="win">调用链 + 拓扑图</td>
+            <td>调用链为主</td>
+            <td class="win">拓扑 + 调用链 + 指标</td>
+          </tr>
+        </tbody>
+      </table>
+      <p><strong>结论：</strong>Jaeger 是 CNCF 通用标准，与 OpenTelemetry 兼容，未来切换 SDK 不绑死。SkyWalking 字节码增强适合 Java 项目，本项目是 Go + C++，Jaeger 更合适。</p>
+
+      <h3>4. Redis 限流 · 为什么用令牌桶不用漏桶</h3>
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>令牌桶 (本项目)</th><th>漏桶</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>突发流量</strong></td>
+            <td class="win">允许 burst（桶满）</td>
+            <td>严格匀速，无突发</td>
+          </tr>
+          <tr>
+            <td><strong>实现</strong></td>
+            <td class="win">Lua 脚本 + INCRBY + EXPIRE</td>
+            <td>需队列或令牌池</td>
+          </tr>
+          <tr>
+            <td><strong>典型场景</strong></td>
+            <td class="win">API 网关，允许短暂突发</td>
+            <td>消息队列消费端</td>
+          </tr>
+          <tr>
+            <td><strong>失败降级</strong></td>
+            <td class="win">Redis 挂时放开限流</td>
+            <td>需双写或主备</td>
+          </tr>
+        </tbody>
+      </table>
+      <p><strong>结论：</strong>API 网关场景下用户请求有自然突发（点击 + 重试），令牌桶允许 burst 更友好。漏桶适合下游严格匀速的场景。</p>
+
+      <h3>5. Redis 限流降级 · 为什么不直接拒绝请求</h3>
+      <div class="procon">
+        <div class="pros">
+          <h4>降级放开的优点</h4>
+          <ul>
+            <li>Redis 故障不阻塞业务，可用性优先</li>
+            <li>避免 Redis 故障导致全站 503</li>
+            <li>快速恢复后限流自动生效</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>降级放开的代价</h4>
+          <ul>
+            <li>故障期间可能被 DDoS 打穿</li>
+            <li>jti 黑名单失效，已登出 token 可用</li>
+            <li>需配合其他防护（WAF / IP 限速）</li>
+          </ul>
+        </div>
+      </div>
+      <p><strong>优化方向：</strong>① Redis 主从 + Sentinel 高可用；② 限流双轨：Redis 在线用 Redis，故障时切到本地内存令牌桶（粗粒度兜底）；③ jti 黑名单加本地缓存 + 定期同步，故障时仍能用旧快照挡一部分。</p>
+
+      <h3>6. 采样策略 · 全量 vs 采样</h3>
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>全量 (本项目)</th><th>头部采样</th><th>尾部采样</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>实现</strong></td>
+            <td class="win">无需采样逻辑</td>
+            <td>入口按比例决定</td>
+            <td>出口按错误率动态</td>
+          </tr>
+          <tr>
+            <td><strong>存储成本</strong></td>
+            <td>高，QPS 大时不可行</td>
+            <td class="win">低，固定比例</td>
+            <td>中，错误全留 + 正常采样</td>
+          </tr>
+          <tr>
+            <td><strong>调试友好</strong></td>
+            <td class="win">所有请求都能查到</td>
+            <td>大多数请求查不到</td>
+            <td>错误请求都查到</td>
+          </tr>
+          <tr>
+            <td><strong>适用规模</strong></td>
+            <td class="win">教学 &lt; 1k QPS</td>
+            <td>中大规模</td>
+            <td class="win">大规模生产</td>
+          </tr>
+        </tbody>
+      </table>
+      <p><strong>结论：</strong>教学场景全量保留方便调试；生产场景建议尾部采样（错误全留 + 正常 1% 采样），既省存储又能查错误。</p>
+
+      <h3>7. 结构化日志 vs 文本日志</h3>
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>结构化 JSON (本项目)</th><th>纯文本</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>查询</strong></td>
+            <td class="win">字段过滤，高效</td>
+            <td>正则匹配，慢</td>
+          </tr>
+          <tr>
+            <td><strong>聚合</strong></td>
+            <td class="win">按字段 group</td>
+            <td>需先解析</td>
+          </tr>
+          <tr>
+            <td><strong>可读性</strong></td>
+            <td>需工具渲染</td>
+            <td class="win">直接可读</td>
+          </tr>
+          <tr>
+            <td><strong>存储</strong></td>
+            <td>略大（字段名重复）</td>
+            <td class="win">紧凑</td>
+          </tr>
+        </tbody>
+      </table>
+      <p><strong>结论：</strong>结构化日志便于 ELK / Loki 聚合查询，生产场景必选。开发期可用 <code>jq</code> 渲染提升可读性。</p>
+
+      <h3>8. 总体优缺点与优化路线</h3>
+      <div class="procon">
+        <div class="pros">
+          <h4>当前设计优点</h4>
+          <ul>
+            <li>三支柱齐全：Metrics + Tracing + Logging</li>
+            <li>Prometheus + Jaeger + Grafana 是 CNCF 黄金组合</li>
+            <li>RequestID 贯穿所有层，串联日志 + trace</li>
+            <li>Redis 故障降级而非阻塞业务</li>
+            <li>一键 <code>make docker-up</code> 拉起完整栈</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>当前设计缺点</h4>
+          <ul>
+            <li>无长期存储（Prometheus 本地 TSDB 15d）</li>
+            <li>无采样策略，QPS 大时存储爆炸</li>
+            <li>Redis 降级期间 jti 黑名单失效</li>
+            <li>无 alertmanager 告警通道</li>
+            <li>结构化日志未接入 Loki / ELK</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">优化路线（按优先级）</span>
+        <strong>P0 · alertmanager + 告警规则：</strong>Prometheus 触发后路由到邮件 / 钉钉；<br>
+        <strong>P1 · Loki + 结构化日志聚合：</strong>统一查询 Metrics + Logs；<br>
+        <strong>P1 · 尾部采样：</strong>错误全留 + 正常采样，省存储；<br>
+        <strong>P2 · Thanus 长期存储：</strong>Prometheus 数据上 S3，长期保留；<br>
+        <strong>P2 · Redis 主从 + Sentinel：</strong>提升限流可用性；<br>
+        <strong>P3 · OpenTelemetry 统一 SDK：</strong>消除 Jaeger 自有 SDK 绑定。
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">为什么这个层是 L7？横切所有层</span>
+        L7 不在垂直调用链上，而是<strong>横切</strong> L1~L8 所有层。每个服务都暴露 /metrics，每个请求都带 RequestID。这样设计的好处是：观测能力对所有层统一，新加服务只需挂中间件即接入观测网。详见 <a href="gateway.html#analysis">网关设计分析</a> 与 <a href="services.html#analysis">微服务设计分析</a>。
+      </div>
+    </section>
 
   </main>
 </div>

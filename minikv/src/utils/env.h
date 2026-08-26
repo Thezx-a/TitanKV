@@ -25,5 +25,10 @@ public:
 
 Env* defaultEnv();
 
+// fsync the directory containing `path` (or `path` itself if it is a dir).
+// Needed after rename/create so directory entries survive power loss.
+// Honest: WSL cannot truly simulate power loss; this enforces correct order.
+Status fsyncDir(const std::string& path);
+
 }  // namespace utils
 }  // namespace minikv

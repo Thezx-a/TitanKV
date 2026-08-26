@@ -44,6 +44,8 @@ enum class ValueType : uint8_t {
 
 static constexpr int   kTypeBits     = 8;
 static constexpr size_t kTrailerBytes = 8;
+// Max sequence stored in the 56-bit field of the trailer (M9 seek key).
+static constexpr uint64_t kMaxSequenceNumber = (uint64_t{1} << 56) - 1u;
 
 // Build an internal_key string from its parts.
 std::string InternalKeyEncode(const Slice& user_key,
@@ -70,6 +72,14 @@ int InternalKeyCompare(const Slice& a, const Slice& b);
 inline bool IsDeletion(const Slice& internal_key) {
     return InternalKeyType(internal_key) == ValueType::kDeletion;
 }
+
+// Point-lookup outcome. Tombstone must NOT be conflated with miss — otherwise
+// DBImpl::get keeps scanning older levels/files and resurrected deleted keys.
+enum class PointLookup : uint8_t {
+    kMiss = 0,
+    kValue = 1,
+    kTombstone = 2,
+};
 
 }  // namespace core
 }  // namespace minikv

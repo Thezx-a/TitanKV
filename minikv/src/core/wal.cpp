@@ -3,8 +3,10 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <iostream>
 #include "utils/crc32.h"
 #include "utils/coding.h"
 
@@ -46,20 +48,36 @@ std::vector<std::string> WAL::replay() {
     std::vector<std::string> records;
     if (fd_ < 0) return records;
     ::lseek(fd_, 0, SEEK_SET);
+    off_t good_offset = 0;
     char header[8];
     while (true) {
         ssize_t n = ::read(fd_, header, 8);
-        if (n != 8) break;
+        if (n == 0) break;          // clean EOF
+        if (n != 8) break;          // torn header
         uint32_t crc = utils::decodeFixed32(header);
         uint32_t len = utils::decodeFixed32(header + 4);
+        // Absurd length ⇒ treat as corruption and stop (do not allocate).
+        if (len > (1u << 28)) break;
         std::string data(len, '\0');
         if (len > 0) {
             n = ::read(fd_, data.data(), len);
-            if (n != static_cast<ssize_t>(len)) break;
+            if (n != static_cast<ssize_t>(len)) break;  // torn payload
         }
         uint32_t actual = utils::crc32c(data.data(), static_cast<int>(len));
         if (actual != crc) break;
         records.push_back(std::move(data));
+        good_offset = ::lseek(fd_, 0, SEEK_CUR);
+    }
+    // [P0-2] Truncate torn tail so subsequent appends are not stranded past a
+    // CRC hole (which would make them invisible on the next reopen).
+    off_t end = ::lseek(fd_, 0, SEEK_END);
+    if (end > good_offset) {
+        std::cerr << "[WARN] truncated " << (end - good_offset)
+                  << " bytes of torn WAL tail: " << path_ << std::endl;
+        if (::ftruncate(fd_, good_offset) != 0) {
+            std::cerr << "[WARN] WAL ftruncate failed errno=" << errno
+                      << " path=" << path_ << std::endl;
+        }
     }
     ::lseek(fd_, 0, SEEK_END);
     return records;

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <string>
 
 namespace minikv {
@@ -10,6 +10,7 @@ enum class StatusCode {
     kNotSupported = 3,
     kInvalidArgument = 4,
     kIOError = 5,
+    kBusy = 6,
 };
 
 class Status {
@@ -21,6 +22,7 @@ public:
     bool isNotFound() const { return code_ == StatusCode::kNotFound; }
     bool isCorruption() const { return code_ == StatusCode::kCorruption; }
     bool isIOError() const { return code_ == StatusCode::kIOError; }
+    bool isBusy() const { return code_ == StatusCode::kBusy; }
 
     StatusCode code() const { return code_; }
     const std::string& message() const { return msg_; }
@@ -31,6 +33,7 @@ public:
     static Status NotSupported(std::string msg = "") { return Status(StatusCode::kNotSupported, std::move(msg)); }
     static Status InvalidArgument(std::string msg = "") { return Status(StatusCode::kInvalidArgument, std::move(msg)); }
     static Status IOError(std::string msg = "") { return Status(StatusCode::kIOError, std::move(msg)); }
+    static Status Busy(std::string msg = "") { return Status(StatusCode::kBusy, std::move(msg)); }
 
     std::string ToString() const;
 

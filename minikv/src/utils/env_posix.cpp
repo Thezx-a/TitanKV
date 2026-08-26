@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <string>
 
 namespace minikv {
 namespace utils {
@@ -61,6 +62,30 @@ public:
 Env* defaultEnv() {
     static PosixEnv env;
     return &env;
+}
+
+Status fsyncDir(const std::string& path) {
+    if (path.empty()) return Status::InvalidArgument("empty path for fsyncDir");
+    struct stat st;
+    std::string dir = path;
+    if (::stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+        dir = path;
+    } else {
+        auto slash = path.find_last_of('/');
+        if (slash == std::string::npos) dir = ".";
+        else if (slash == 0) dir = "/";
+        else dir = path.substr(0, slash);
+    }
+    int dfd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY);
+    if (dfd < 0) return Status::IOError("cannot open dir for fsync: " + dir);
+    int rc = ::fsync(dfd);
+    int err = errno;
+    ::close(dfd);
+    if (rc != 0) {
+        return Status::IOError("fsync dir failed: " + dir +
+                               " errno=" + std::to_string(err));
+    }
+    return Status::Ok();
 }
 
 }  // namespace utils

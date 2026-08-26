@@ -20,8 +20,12 @@ struct SSTableMeta {
 
 class Version {
 public:
-    Version();
+    // level_count = max_level + 1 (indices 0..max_level). Default 8.
+    explicit Version(int level_count = 8);
     ~Version();
+
+    // Grow capacity if needed (never shrink — preserves SST refs).
+    void ensureLevelCapacity(int level_count);
 
     // Plugs this Version into a Manifest so all mutations are persisted.
     void setManifest(Manifest* m) { manifest_ = m; }

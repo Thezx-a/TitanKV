@@ -78,6 +78,13 @@ public:
         return std::nullopt;
     }
 
+    // First node with InternalKeyCompare(node->key, target) >= 0, or nullptr.
+    // O(log n). Caller must not retain the pointer across a write unlock.
+    SkipNode* findGreaterOrEqual(const Slice& target) const {
+        std::shared_lock<std::shared_mutex> lock(mutex_);
+        return findGreaterOrEqualUnlocked(target);
+    }
+
     void del(const std::string& key) {
         std::unique_lock<std::shared_mutex> lock(mutex_);
         std::vector<SkipNode*> update(kMaxLevel + 1, nullptr);
@@ -100,6 +107,8 @@ public:
         }
     }
 
+    // Full copy — kept for flush / dump. Point lookup and iterators must not
+    // use this on the hot path (M9).
     std::vector<std::pair<std::string, std::string>> entries() const {
         std::shared_lock<std::shared_mutex> lock(mutex_);
         std::vector<std::pair<std::string, std::string>> result;
@@ -121,7 +130,56 @@ public:
         return head_->forward[0] == nullptr;
     }
 
+    // Lazy cursor over the list. Each seek/next takes a shared lock briefly.
+    class Iterator {
+    public:
+        explicit Iterator(const SkipList* list) : list_(list) {}
+
+        void seekToFirst() {
+            std::shared_lock<std::shared_mutex> lock(list_->mutex_);
+            node_ = list_->head_->forward[0];
+        }
+
+        void seek(const Slice& target) {
+            std::shared_lock<std::shared_mutex> lock(list_->mutex_);
+            node_ = list_->findGreaterOrEqualUnlocked(target);
+        }
+
+        void next() {
+            std::shared_lock<std::shared_mutex> lock(list_->mutex_);
+            if (node_) node_ = node_->forward[0];
+        }
+
+        bool valid() const { return node_ != nullptr; }
+
+        Slice key() const {
+            if (!node_) return Slice();
+            return Slice(node_->key);
+        }
+
+        Slice value() const {
+            if (!node_) return Slice();
+            return Slice(node_->value);
+        }
+
+    private:
+        const SkipList* list_;
+        SkipNode* node_ = nullptr;
+    };
+
 private:
+    friend class Iterator;
+
+    SkipNode* findGreaterOrEqualUnlocked(const Slice& target) const {
+        SkipNode* x = head_;
+        for (int i = max_level_; i >= 0; --i) {
+            while (x->forward[i] &&
+                   InternalKeyCompare(Slice(x->forward[i]->key), target) < 0)
+                x = x->forward[i];
+        }
+        return x->forward[0];
+    }
+
     int randomLevel() {
         static thread_local std::mt19937 rng(std::random_device{}());
         static thread_local std::uniform_int_distribution<int> dist(0, 1);

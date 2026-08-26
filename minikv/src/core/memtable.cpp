@@ -1,4 +1,4 @@
-﻿#include "core/memtable.h"
+#include "core/memtable.h"
 
 namespace minikv {
 namespace core {
@@ -17,18 +17,23 @@ void MemTable::put(const Slice& userKey, const Slice& value, uint64_t seq, bool 
     }
 }
 
-std::optional<std::string> MemTable::get(const Slice& userKey, uint64_t seq) const {
+PointLookup MemTable::lookup(const Slice& userKey, uint64_t seq, std::string* value) const {
+    (void)seq;  // snapshot filtering is T2.2; newest version wins today
     std::shared_lock<std::shared_mutex> lock(mutex_);
-    auto entries = table_->entries();
-    for (auto& [ik, v] : entries) {
-        Slice ikSlice(ik);
-        Slice uk = InternalKeyUserKey(ikSlice);
-        int cmp = uk.compare(userKey);
-        if (cmp < 0) continue;
-        if (cmp > 0) break;
-        if (IsDeletion(ikSlice)) return std::nullopt;
-        return v;
-    }
+    // Seek key: max seq + kValue sorts first among this user key (InternalKeyCompare).
+    std::string seek = InternalKeyEncode(userKey, kMaxSequenceNumber, ValueType::kValue);
+    SkipNode* node = table_->findGreaterOrEqual(Slice(seek));
+    if (!node) return PointLookup::kMiss;
+    Slice uk = InternalKeyUserKey(Slice(node->key));
+    if (uk.compare(userKey) != 0) return PointLookup::kMiss;
+    if (IsDeletion(Slice(node->key))) return PointLookup::kTombstone;
+    if (value) *value = node->value;
+    return PointLookup::kValue;
+}
+
+std::optional<std::string> MemTable::get(const Slice& userKey, uint64_t seq) const {
+    std::string v;
+    if (lookup(userKey, seq, &v) == PointLookup::kValue) return v;
     return std::nullopt;
 }
 

@@ -1,10 +1,11 @@
-﻿#pragma once
+#pragma once
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 #include "core/bloom_filter.h"
+#include "core/internal_key.h"
 #include "core/block.h"
 #include "minikv/slice.h"
 #include "minikv/status.h"
@@ -18,6 +19,13 @@ class SSTableReader {
 public:
     static std::unique_ptr<SSTableReader> open(const std::string& path,
                                                BlockCache* cache = nullptr);
+    ~SSTableReader();
+
+    // Point lookup with explicit Status: Ok + *out in {miss,value,tombstone},
+    // or Corruption/IOError when the SST cannot be trusted.
+    Status lookup(const Slice& userKey, std::string* value, PointLookup* out) const;
+    // Convenience: value on hit; nullopt on miss/tombstone. Errors also → nullopt
+    // (prefer lookup() when distinguishing corruption matters).
     std::optional<std::string> get(const Slice& userKey) const;
     bool mightContain(const Slice& key) const { return bloom_ && bloom_->mightContain(key); }
     Status scan(const Slice& start, const Slice& end,
@@ -26,6 +34,9 @@ public:
     const std::string& path() const { return path_; }
     uint64_t fileSize() const { return file_size_; }
     uint8_t  formatVersion() const { return format_version_; }
+    // T2.1: expose index for block-lazy iterators.
+    size_t numDataBlocks() const { return index_entries_.size(); }
+    Status readDataBlock(size_t i, std::string* out) const;
 
 private:
     struct IndexEntry {

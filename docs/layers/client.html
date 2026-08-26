@@ -54,6 +54,50 @@
       </div>
     </div>
 
+    <figure class="layer-banner">
+      <img alt="三种客户端接入概念图" src="https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=Minimalist%20editorial%20illustration%20of%20three%20client%20types%20connecting%20to%20a%20server%20warm%20cream%20beige%20background%20deep%20navy%20blue%20browser%20window%20terminal%20command%20line%20and%20code%20editor%20geometric%20shapes%20flowing%20arrows%20pointing%20to%20a%20single%20gateway%20block%20soft%20slate%20gray%20accents%20elegant%20flat%20design%20no%20text%20no%20words%20no%20letters&image_size=landscape_16_9" />
+    </figure>
+
+    <h2>接入流程 · 三种客户端如何抵达 Gateway</h2>
+
+    <div class="vflow">
+      <div class="vstep"><div class="vnode">1</div><div class="vbody">
+        <p class="vtitle">Web 控制台 · 登录写 cookie <span class="vtag safe">web/</span></p>
+        <p class="vdesc">用户在 <code>/login</code> 提交账密 → Auth 微服务验证 → 返回 Access + Refresh；前端写 <code>titan_token</code> cookie（httpOnly + SameSite=Strict）。</p>
+        <p class="vdetail"><strong>崩溃点 A：</strong>登录成功但 cookie 写失败（浏览器拦截）→ 用户重定向回登录页；可换成 sessionStorage 暂存。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">2</div><div class="vbody">
+        <p class="vtitle">apiFetch · 自动注入 Bearer <span class="vtag safe">web/lib/api.ts</span></p>
+        <p class="vdesc">所有 fetch 走 <code>apiFetch</code>，自动读 cookie 注入 <code>Authorization: Bearer</code>，401 时尝试 Refresh。</p>
+        <p class="vdetail"><strong>崩溃点 B：</strong>Access 过期且 Refresh 也过期 → 401 拦截重定向登录页，重新建立认证态。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">3</div><div class="vbody">
+        <p class="vtitle">CLI · keyforge addAuth <span class="vtag warn">client-cli/main.go</span></p>
+        <p class="vdesc"><code>addAuth()</code> 注入 <code>Authorization: Bearer $TITANKV_TOKEN</code> 或 <code>--token</code>；token 从环境变量或参数取。</p>
+        <p class="vdetail"><strong>崩溃点 C：</strong>token 失效 → 401，CLI 报错退出；脚本侧需主动调 Login 续签。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">4</div><div class="vbody">
+        <p class="vtitle">SDK · New + Login <span class="vtag safe">client-go/titan/client.go</span></p>
+        <p class="vdesc">传入 <code>gatewayURL + apiKey</code> 构造 Client；apiKey 为空时调 <code>Login(user, pass)</code> 拿 JWT，缓存到 <code>c.token</code>。</p>
+        <p class="vdetail"><strong>崩溃点 D：</strong>JWT 过期但 Client 未感知 → 服务端 401；SDK 内置 maxRetries 自动重试 Login。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">5</div><div class="vbody">
+        <p class="vtitle">HTTP 请求 · 抵达 Gateway:8080 <span class="vtag safe">L3</span></p>
+        <p class="vdesc">所有客户端最终都打 Gateway :8080，进入洋葱中间件链（RequestID → Auth → RBAC → ... → 反向代理）。</p>
+        <p class="vdetail"><strong>崩溃点 E：</strong>Gateway 不可达 → 客户端 connection refused；CLI/SDK 重试机制兜底，Web 给用户提示。</p>
+      </div></div>
+
+      <div class="vstep"><div class="vnode">6</div><div class="vbody">
+        <p class="vtitle">Scan SSE · 流式响应直读 <span class="vtag warn">CLI</span></p>
+        <p class="vdesc"><code>keyforge scan</code> 用 <code>io.Copy(os.Stdout, resp.Body)</code> 把 SSE 流直接打到 stdout，无需等待全量。</p>
+        <p class="vdetail"><strong>崩溃点 F：</strong>流中途连接断 → io.Copy 返回 EOF + 错误，已读数据已输出；用户重试即可（scan 是幂等读）。</p>
+      </div></div>
+    </div>
+
     <h2>三种客户端对比</h2>
     <table class="kp">
       <thead><tr><th>客户端</th><th>目录</th><th>鉴权</th><th>用途</th></tr></thead>
@@ -149,6 +193,281 @@ client-go/titan/
 └── errors.go            typed errors
 
 web/                    → 见 web.html (L8 控制台)</code></pre>
+
+    <section class="analysis" id="analysis">
+      <h2>设计深度分析</h2>
+      <p class="lead">客户端层是用户接触系统的第一层，其设计取舍直接决定体验与安全。本节覆盖崩溃恢复、JWT vs APIKey、SSE 流式、CLI vs SDK vs Web、SDK 重试策略等核心议题。</p>
+
+      <h3>1. 崩溃恢复 · 六种客户端场景</h3>
+      <div class="scenario-grid">
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">CASE A</span><span class="stitle">登录后 cookie 写入失败</span></div>
+          <p class="sbody">浏览器策略拦截或 SameSite 不匹配，cookie 未落盘。Web 用户感知到登录循环；可改用 sessionStorage + Authorization header 双轨。</p>
+          <span class="sresult ok">语义：无损 · 仅体验降级</span>
+        </div>
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">CASE B</span><span class="stitle">Access/Refresh 双过期</span></div>
+          <p class="sbody">Access 30min + Refresh 7d 都过期，需重新登录。Web 端 401 拦截自动重定向登录页。</p>
+          <span class="sresult warn">语义：可恢复 · 用户重新认证</span>
+        </div>
+        <div class="scenario warn">
+          <div class="shead"><span class="snum">CASE C</span><span class="stitle">CLI token 失效</span></div>
+          <p class="sbody">运维脚本长期未跑，JWT 过期。CLI 报 401 退出；脚本侧需主动调 Login 续签或用 APIKey 替代。</p>
+          <span class="sresult warn">语义：脚本中断 · 推荐改用 APIKey</span>
+        </div>
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">CASE D</span><span class="stitle">SDK JWT 过期</span></div>
+          <p class="sbody">Client 未感知 token 过期，服务端 401；SDK 内置 maxRetries 自动重试 Login，用户无感。</p>
+          <span class="sresult ok">语义：可恢复 · SDK 自动续签</span>
+        </div>
+        <div class="scenario danger">
+          <div class="shead"><span class="snum">CASE E</span><span class="stitle">Gateway 不可达</span></div>
+          <p class="sbody">网关进程崩 / 网络分区，connection refused。CLI/SDK 重试 + 退避；Web 给用户提示并禁用按钮。</p>
+          <span class="sresult warn">语义：服务中断 · 客户端兜底</span>
+        </div>
+        <div class="scenario safe">
+          <div class="shead"><span class="snum">CASE F</span><span class="stitle">SSE 流中途断</span></div>
+          <p class="sbody">scan 流式响应中途连接断，<code>io.Copy</code> 返回 EOF+错误，已读数据已输出。用户重试即可（scan 幂等读）。</p>
+          <span class="sresult ok">语义：可重试 · 部分结果已落地</span>
+        </div>
+      </div>
+
+      <h3>2. JWT vs APIKey · 为什么提供两种</h3>
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>JWT (Access)</th><th>APIKey</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>典型客户端</strong></td>
+            <td>Web / CLI / SDK(Login)</td>
+            <td class="win">SDK (机器对机器)</td>
+          </tr>
+          <tr>
+            <td><strong>有效期</strong></td>
+            <td>30min，需 Refresh</td>
+            <td class="win">长期，按需吊销</td>
+          </tr>
+          <tr>
+            <td><strong>验证方式</strong></td>
+            <td class="win">本地 HMAC 验签，无 DB 查询</td>
+            <td>查 Redis / DB 看 jti 黑名单</td>
+          </tr>
+          <tr>
+            <td><strong>吊销能力</strong></td>
+            <td>jti 黑名单（Redis）</td>
+            <td class="win">直接删 DB 行，立即生效</td>
+          </tr>
+          <tr>
+            <td><strong>权限范围</strong></td>
+            <td>含 role / user_id</td>
+            <td class="win">scope 字段精细控制</td>
+          </tr>
+          <tr>
+            <td><strong>安全风险</strong></td>
+            <td>泄露 30min 窗口</td>
+            <td>泄露窗口大，需 IP 白名单</td>
+          </tr>
+        </tbody>
+      </table>
+      <p><strong>结论：</strong>JWT 优化人类场景（短时窗 + Refresh 续航），APIKey 优化机器场景（长期 + 精细 scope）。两种共存让 Web/CLI/SDK 各取所需，不要强行统一。</p>
+
+      <h3>3. CLI (Cobra) vs SDK (Go) vs Web (Next.js) · 三客户端的取舍</h3>
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>Cobra CLI</th><th>Go SDK</th><th>Next.js Web</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>用户</strong></td>
+            <td>运维 / 脚本</td>
+            <td>程序集成</td>
+            <td>人类</td>
+          </tr>
+          <tr>
+            <td><strong>交互</strong></td>
+            <td>命令行参数 + stdin/stdout</td>
+            <td>API 调用 + 类型安全</td>
+            <td>表单 + 可视化</td>
+          </tr>
+          <tr>
+            <td><strong>鉴权</strong></td>
+            <td>--token / env</td>
+            <td>APIKey 或 JWT Login</td>
+            <td>cookie + 自动 Refresh</td>
+          </tr>
+          <tr>
+            <td><strong>流式输出</strong></td>
+            <td class="win">io.Copy stdout，最简</td>
+            <td>chan / callback</td>
+            <td>SSE EventSource</td>
+          </tr>
+          <tr>
+            <td><strong>错误处理</strong></td>
+            <td>exit code + stderr</td>
+            <td>typed errors</td>
+            <td>toast + 重试</td>
+          </tr>
+          <tr>
+            <td><strong>实现成本</strong></td>
+            <td class="win">~300 行单文件</td>
+            <td>~500 行多文件</td>
+            <td>整个 Next.js 工程</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="procon">
+        <div class="pros">
+          <h4>三种并存的优点</h4>
+          <ul>
+            <li>覆盖人类 / 运维 / 程序三种使用场景</li>
+            <li>CLI 是最低成本的调试工具</li>
+            <li>SDK 提供类型安全，便于二次开发</li>
+            <li>Web 给非技术用户提供可视化</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>缺点</h4>
+          <ul>
+            <li>三种客户端都要维护，迭代成本×3</li>
+            <li>鉴权逻辑三套实现（cookie/token/apikey）</li>
+            <li>错误码映射三套（exit code / typed err / toast）</li>
+          </ul>
+        </div>
+      </div>
+      <p><strong>优化方向：</strong>① 抽取 <code>client-core</code> 公共库（鉴权 + 重试 + 错误类型），CLI/SDK 都基于它构建；② 用 OpenAPI spec 自动生成 SDK，减少手写成本；③ Web 端用 TanStack Query 统一错误展示。</p>
+
+      <h3>4. SSE 流式 scan · 为什么不用 WebSocket / gRPC stream</h3>
+      <table class="compare">
+        <thead>
+          <tr><th>维度</th><th>SSE (本项目)</th><th>WebSocket</th><th>gRPC stream</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>协议</strong></td>
+            <td class="win">HTTP/1.1，单向服务端推</td>
+            <td>双工，需 Upgrade 握手</td>
+            <td>HTTP/2，需 proto + 客户端 stub</td>
+          </tr>
+          <tr>
+            <td><strong>实现</strong></td>
+            <td class="win">服务端 <code>Flusher</code>，客户端 EventSource</td>
+            <td>gorilla/websocket，需读 + 写循环</td>
+            <td>proto + grpc-go，复杂</td>
+          </tr>
+          <tr>
+            <td><strong>代理友好</strong></td>
+            <td class="win">普通 HTTP，Nginx/网关透传</td>
+            <td>需 Upgrade，部分代理不支持</td>
+            <td>HTTP/2，部分 LB 不支持</td>
+          </tr>
+          <tr>
+            <td><strong>CLI 输出</strong></td>
+            <td class="win">io.Copy stdout，最简</td>
+            <td>需解析 frame</td>
+            <td>需 proto decode</td>
+          </tr>
+          <tr>
+            <td><strong>双向通信</strong></td>
+            <td>单向（仅服务端→客户端）</td>
+            <td class="win">双向</td>
+            <td class="win">双向</td>
+          </tr>
+        </tbody>
+      </table>
+      <p><strong>结论：</strong>scan 是单向流式输出场景，SSE 协议简单、代理友好、CLI 实现成本最低。双向通信才需 WebSocket/gRPC stream。</p>
+
+      <h3>5. SDK 重试策略 · maxRetries=3 的取舍</h3>
+      <p>SDK 默认 <code>WithMaxRetries(3)</code>，覆盖网络瞬时故障；但重试会放大写请求，需配合幂等性。</p>
+      <div class="procon">
+        <div class="pros">
+          <h4>重试的优点</h4>
+          <ul>
+            <li>瞬时网络抖动对用户无感</li>
+            <li>JWT 过期可触发自动 Login 续签</li>
+            <li>降低运维告警噪音</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>重试的代价</h4>
+          <ul>
+            <li>非幂等写（如转账）重复执行风险</li>
+            <li>放大流量，雪崩风险</li>
+            <li>无退避策略时持续打挂的服务</li>
+          </ul>
+        </div>
+      </div>
+      <p><strong>优化方向：</strong>① 区分幂等：GET/DELETE/PUT（带版本号）可重试，POST 用 Idempotency-Key；② 指数退避 + jitter：1s/2s/4s + 随机偏移，避免同步重试雪崩；③ 熔断器：连续失败 N 次后短路一段时间，让上游恢复。</p>
+
+      <h3>6. cookie httpOnly + SameSite=Strict · 为什么这样配置</h3>
+      <table class="compare">
+        <thead>
+          <tr><th>配置</th><th>httpOnly + SameSite=Strict</th><th>普通 cookie</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>XSS 偷 token</strong></td>
+            <td class="win">JS 读不到，无法窃取</td>
+            <td>document.cookie 可读</td>
+          </tr>
+          <tr>
+            <td><strong>CSRF 攻击</strong></td>
+            <td class="win">跨站不带 cookie</td>
+            <td>跨站自动带，需 CSRF token</td>
+          </tr>
+          <tr>
+            <td><strong>第三方嵌入</strong></td>
+            <td>无法跨站嵌入</td>
+            <td class="win">可跨站（如 OAuth 回调）</td>
+          </tr>
+          <tr>
+            <td><strong>体验</strong></td>
+            <td>从外部链接进入需重新登录</td>
+            <td class="win">无缝</td>
+          </tr>
+        </tbody>
+      </table>
+      <p><strong>结论：</strong>本项目是 KV 服务，无第三方嵌入需求，Strict 最安全。需 OAuth 回调场景可降级 SameSite=Lax。</p>
+
+      <h3>7. 总体优缺点与优化路线</h3>
+      <div class="procon">
+        <div class="pros">
+          <h4>当前设计优点</h4>
+          <ul>
+            <li>三客户端覆盖完整使用场景</li>
+            <li>JWT + APIKey 双轨鉴权，按场景选最优</li>
+            <li>SSE 流式 scan，CLI 实现极简</li>
+            <li>SDK 内置重试，瞬时故障无感</li>
+            <li>cookie httpOnly + Strict，安全默认</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>当前设计缺点</h4>
+          <ul>
+            <li>三客户端维护成本高</li>
+            <li>CLI token 失效需手动续签</li>
+            <li>重试无指数退避，雪崩风险</li>
+            <li>无 Idempotency-Key，POST 重试不安全</li>
+            <li>SDK 错误类型未对接 OpenAPI 自动生成</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">优化路线（按优先级）</span>
+        <strong>P0 · 公共 client-core 库：</strong>CLI/SDK 共享鉴权 + 重试 + 错误；<br>
+        <strong>P1 · OpenAPI 自动生成 SDK：</strong>多语言客户端，零手写；<br>
+        <strong>P1 · 指数退避 + 熔断器：</strong>避免重试雪崩；<br>
+        <strong>P2 · Idempotency-Key：</strong>POST 重试安全；<br>
+        <strong>P2 · CLI token 自动续签：</strong>检测过期主动 Login；<br>
+        <strong>P3 · WebSocket 双向流：</strong>未来支持订阅 / watch 场景。
+      </div>
+
+      <div class="callout">
+        <span class="ctitle">为什么这个层是 L1？</span>
+        L1 客户端 → L2 网络库 → L3 网关 → ... → L8 前端。客户端层在最外层，是人类/程序接触系统的入口。它的<strong>关键约束</strong>是：不知道底层架构（以为就是单机 HTTP），但需把鉴权、重试、错误处理这些"客户端关切"做扎实。详见 <a href="gateway.html#analysis">网关设计分析</a> 与 <a href="web.html#analysis">前端控制台设计分析</a>。
+      </div>
+    </section>
 
   </main>
 </div>

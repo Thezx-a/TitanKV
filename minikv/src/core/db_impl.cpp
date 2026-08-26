@@ -1,4 +1,4 @@
-﻿#include "core/db_impl.h"
+#include "core/db_impl.h"
 #include "core/sstable_builder.h"
 #include "core/sstable_reader.h"
 #include "core/sstable_iterator.h"
@@ -6,6 +6,8 @@
 #include "core/compression.h"
 #include "core/internal_key.h"
 #include "utils/coding.h"
+#include "utils/env.h"
+#include "utils/metrics.h"
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -39,6 +41,8 @@ DBImpl::DBImpl(const Options& options) : options_(options), seq_(0) {
     flush_thread_ = std::thread(&DBImpl::flushLoop, this);
     if (options_.lru_cache_capacity > 0) {
         block_cache_ = std::make_unique<BlockCache>(options_.lru_cache_capacity);
+        table_cache_ = std::make_unique<TableCache>(TableCache::kDefaultCapacity,
+                                                    block_cache_.get());
     }
 }
 
@@ -62,7 +66,7 @@ Status DBImpl::open(const Options& options, std::unique_ptr<DB>* dbptr) {
     impl->compaction_mgr_ = std::make_unique<CompactionManager>(
         &impl->version_, impl->db_path_, impl->options_.block_size,
         impl->options_.max_level, impl->options_.level0_compaction_trigger,
-        impl->block_cache_.get());
+        impl->block_cache_.get(), impl->table_cache_.get());
     impl->compaction_mgr_->start();
     *dbptr = std::move(impl);
     return Status::Ok();
@@ -93,19 +97,40 @@ Status DBImpl::purgeOrphanSSTables() {
         while ((ent = ::readdir(dir)) != nullptr) {
             if (ent->d_name[0] == '.') continue;  // skip . / ..
             std::string full = dir_path + "/" + ent->d_name;
-            // Only consider .sst files; ignore anything else (e.g. tmp files).
-            if (full.size() < 4 ||
-                full.compare(full.size() - 4, 4, ".sst") != 0) {
+            const std::string bloom_suffix = ".sst.bloom";
+
+            // Orphan .sst → drop SST + sibling .bloom.
+            if (full.size() >= 4 &&
+                full.compare(full.size() - 4, 4, ".sst") == 0) {
+                if (live_paths.count(full) > 0) continue;
+                if (::unlink(full.c_str()) == 0) {
+                    ++purged;
+                    std::cerr << "[INFO] purged orphan SST: " << full << std::endl;
+                } else {
+                    std::cerr << "[WARN] unlink orphan failed: " << full
+                              << " errno=" << std::strerror(errno) << std::endl;
+                }
+                std::string bloom = full + ".bloom";
+                if (::unlink(bloom.c_str()) == 0) {
+                    ++purged;
+                    std::cerr << "[INFO] purged orphan bloom: " << bloom << std::endl;
+                }
                 continue;
             }
-            if (live_paths.count(full) > 0) continue;  // live, keep
 
-            if (::unlink(full.c_str()) == 0) {
-                ++purged;
-                std::cerr << "[INFO] purged orphan SST: " << full << std::endl;
-            } else {
-                std::cerr << "[WARN] unlink orphan failed: " << full
-                          << " errno=" << std::strerror(errno) << std::endl;
+            // Orphan .sst.bloom whose SST is not live (crash left bloom behind).
+            if (full.size() > bloom_suffix.size() &&
+                full.compare(full.size() - bloom_suffix.size(),
+                             bloom_suffix.size(), bloom_suffix) == 0) {
+                std::string sst = full.substr(0, full.size() - 6);  // strip ".bloom"
+                if (live_paths.count(sst) > 0) continue;
+                if (::unlink(full.c_str()) == 0) {
+                    ++purged;
+                    std::cerr << "[INFO] purged orphan bloom: " << full << std::endl;
+                } else {
+                    std::cerr << "[WARN] unlink orphan bloom failed: " << full
+                              << " errno=" << std::strerror(errno) << std::endl;
+                }
             }
         }
         ::closedir(dir);
@@ -119,11 +144,15 @@ Status DBImpl::purgeOrphanSSTables() {
 }
 
 Status DBImpl::recover() {
-    manifest_ = std::make_unique<Manifest>(db_path_);
+    const int level_count = options_.max_level + 1;
+    version_.ensureLevelCapacity(level_count);
+    manifest_ = std::make_unique<Manifest>(db_path_, level_count);
     Status ms = manifest_->open();
     if (!ms.ok()) return ms;
     version_.setManifest(manifest_.get());
     version_.restoreFrom(manifest_->levels());
+    version_.ensureLevelCapacity(
+        std::max(level_count, static_cast<int>(manifest_->levels().size())));
 
     // Garbage-collect orphan SSTables BEFORE rewriting MANIFEST snapshot:
     //   (1) free disk space held by crash-left orphans (e.g. a flush that wrote
@@ -209,6 +238,8 @@ Status DBImpl::openWal(uint64_t file_number) {
     version_.ensureNextFileNumberAtLeast(file_number + 1);
     current_wal_path_ = makeWalPath(file_number);
     wal_ = std::make_unique<WAL>(current_wal_path_);
+    // [P0-4] Newly created wal-<N>.log directory entry must be durable.
+    (void)utils::fsyncDir(current_wal_path_);
     return Status::Ok();
 }
 
@@ -227,6 +258,8 @@ Status DBImpl::rotateWal() {
     }
     wal_ = std::move(new_wal);
     current_wal_path_ = std::move(new_path);
+    // [P0-4] Persist the new WAL directory entry after rotate.
+    (void)utils::fsyncDir(current_wal_path_);
     return Status::Ok();
 }
 
@@ -333,6 +366,10 @@ Status DBImpl::write(const WriteOptions& opts, const WriteBatch& batch) {
 Status DBImpl::doWriteGroup(const std::vector<std::shared_ptr<GroupEntry>>& group) {
     if (group.empty()) return Status::Ok();
 
+    // T2.5 write stall before accepting more durable work.
+    Status stall = waitUntilWritable();
+    if (!stall.ok()) return stall;
+
     // Conservative sync policy: if ANY entry wanted sync, the whole group syncs.
     bool need_sync = false;
     for (const auto& e : group) {
@@ -390,11 +427,25 @@ Status DBImpl::doWriteGroup(const std::vector<std::shared_ptr<GroupEntry>>& grou
     }
 
     maybeFlush();
+
+    {
+        auto& m = utils::EngineMetrics::instance();
+        for (const auto& e : group) {
+            for (const auto& op : e->batch.ops()) {
+                if (op.type == BatchOpType::kPut) {
+                    m.puts.fetch_add(1, std::memory_order_relaxed);
+                } else if (op.type == BatchOpType::kDelete) {
+                    m.deletes.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        }
+    }
     return Status::Ok();
 }
 
 Status DBImpl::get(const ReadOptions& opts, const Slice& key, std::string* value) {
     (void)opts;
+    utils::EngineMetrics::instance().gets.fetch_add(1, std::memory_order_relaxed);
     std::shared_ptr<MemTable> mem;
     std::vector<std::shared_ptr<MemTable>> imms;
     {
@@ -409,32 +460,43 @@ Status DBImpl::get(const ReadOptions& opts, const Slice& key, std::string* value
         imms = immutable_list_;
     }
     const uint64_t snapshot_seq = seq_.load();
-    if (mem) {
-        auto result = mem->get(key, snapshot_seq);
-        if (result) {
-            *value = std::move(*result);
-            return Status::Ok();
+
+    auto finish = [&](PointLookup pl, std::string& buf) -> Status {
+        if (pl == PointLookup::kTombstone) {
+            utils::EngineMetrics::instance().get_misses.fetch_add(1, std::memory_order_relaxed);
+            return Status::NotFound();
         }
+        utils::EngineMetrics::instance().get_hits.fetch_add(1, std::memory_order_relaxed);
+        *value = std::move(buf);
+        return Status::Ok();
+    };
+
+    if (mem) {
+        std::string buf;
+        PointLookup pl = mem->lookup(key, snapshot_seq, &buf);
+        if (pl != PointLookup::kMiss) return finish(pl, buf);
     }
     for (auto it = imms.rbegin(); it != imms.rend(); ++it) {
-        auto result = (*it)->get(key, snapshot_seq);
-        if (result) {
-            *value = std::move(*result);
-            return Status::Ok();
-        }
+        std::string buf;
+        PointLookup pl = (*it)->lookup(key, snapshot_seq, &buf);
+        if (pl != PointLookup::kMiss) return finish(pl, buf);
     }
+    // Within each level, newer SSTables are appended last — scan reverse so a
+    // newer tombstone hides older values in sibling files (L0 overlap / L1+
+    // after L0 compact that did not merge dst overlaps).
     for (int level = 0; level <= options_.max_level; ++level) {
         auto files = version_.getLevelFiles(level);
-        for (const auto& path : files) {
-            auto reader = SSTableReader::open(path, block_cache_.get());
+        for (auto rit = files.rbegin(); rit != files.rend(); ++rit) {
+            auto reader = table_cache_->get(*rit);
             if (!reader) continue;
-            auto r = reader->get(key);
-            if (r) {
-                *value = std::move(*r);
-                return Status::Ok();
-            }
+            std::string buf;
+            PointLookup pl = PointLookup::kMiss;
+            Status s = reader->lookup(key, &buf, &pl);
+            if (!s.ok()) return s;
+            if (pl != PointLookup::kMiss) return finish(pl, buf);
         }
     }
+    utils::EngineMetrics::instance().get_misses.fetch_add(1, std::memory_order_relaxed);
     return Status::NotFound();
 }
 
@@ -450,6 +512,39 @@ Status DBImpl::get(const ReadOptions& opts, const Slice& key, std::string* value
 // during IO and only briefly reacquires write_mutex_ at the end to erase the
 // finished entry from immutable_list_.
 // ---------------------------------------------------------------------------
+
+Status DBImpl::waitUntilWritable() {
+    // Caller holds write_mutex_. Release while waiting so flush/compaction can progress.
+    const size_t max_imm = options_.max_immutable_memtables == 0
+                               ? 1
+                               : options_.max_immutable_memtables;
+    const size_t l0_stop = options_.level0_stop_writes_trigger == 0
+                               ? 1
+                               : options_.level0_stop_writes_trigger;
+
+    for (;;) {
+        const size_t imm = immutable_list_.size();
+        const size_t l0 = version_.getLevelFiles(0).size();
+        if (imm < max_imm && l0 < l0_stop) return Status::Ok();
+
+        if (options_.write_stall_return_busy) {
+            utils::EngineMetrics::instance().write_stalls.fetch_add(1, std::memory_order_relaxed);
+            return Status::Busy("write stall: immutable=" + std::to_string(imm) +
+                                " L0=" + std::to_string(l0));
+        }
+
+        write_mutex_.unlock();
+        if (imm >= max_imm) {
+            waitFlush();
+        }
+        if (l0 >= l0_stop && compaction_mgr_) {
+            compaction_mgr_->triggerCompaction();
+            compaction_mgr_->waitIdle();
+        }
+        write_mutex_.lock();
+    }
+}
+
 void DBImpl::maybeFlush() {
     if (!memtable_->shouldFlush()) return;
 
@@ -547,6 +642,7 @@ Status DBImpl::flushOne(const std::shared_ptr<MemTable>& flushing,
     }
     builder.finish();
     version_.addLevelFile(0, filePath);
+    utils::EngineMetrics::instance().flushes.fetch_add(1, std::memory_order_relaxed);
 
     // SST is durable on disk now: it is safe to (1) drop the MemTable from
     // immutable_list_ (reads will fall through to the SST) and (2) unlink the
@@ -581,6 +677,8 @@ std::unique_ptr<Iterator> DBImpl::newIterator(const ReadOptions& opts) {
     }
 
     if (mem) {
+        // Snapshot copy for live MemTable: concurrent put+scan is not
+        // snapshot-isolated with a bare SkipList cursor (M9 honest boundary).
         auto live = mem->entries();
         auto it = std::make_unique<MemTableIterator>(std::move(live));
         it->seekToFirst();
@@ -589,18 +687,18 @@ std::unique_ptr<Iterator> DBImpl::newIterator(const ReadOptions& opts) {
     // Reverse iterate (newest first) so MergingIterator sees higher-seq
     // versions before lower-seq ones from older frozen MemTables.
     for (auto it_imm = imms.rbegin(); it_imm != imms.rend(); ++it_imm) {
-        auto imm_entries = (*it_imm)->entries();
-        auto it = std::make_unique<MemTableIterator>(std::move(imm_entries));
+        // Immutable MemTables are write-frozen — lazy SkipList cursor is safe.
+        auto it = std::make_unique<MemTableIterator>(
+            std::shared_ptr<const MemTable>(*it_imm));
         it->seekToFirst();
         children.push_back(std::move(it));
     }
 
     for (int level = 0; level <= options_.max_level; ++level) {
         for (const auto& path : version_.getLevelFiles(level)) {
-            auto reader = SSTableReader::open(path, block_cache_.get());
+            auto reader = table_cache_->get(path);
             if (!reader) continue;
-            std::shared_ptr<SSTableReader> shared(std::move(reader));
-            auto it = std::make_unique<SSTableIterator>(std::move(shared));
+            auto it = std::make_unique<SSTableIterator>(reader);
             it->seekToFirst();
             children.push_back(std::move(it));
         }
@@ -623,6 +721,10 @@ void DBImpl::waitFlush() {
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
+}
+
+void DBImpl::waitCompaction() {
+    if (compaction_mgr_) compaction_mgr_->waitIdle();
 }
 
 }  // namespace core
