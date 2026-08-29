@@ -10,17 +10,23 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 // Service 是 RAG 服务的对外入口, 聚合 store / index / embedder / ingester / retriever / chat.
 type Service struct {
-	cfg       Config
-	store     *Store
-	index     VectorIndex
-	embedder  Embedder
-	ingester  *Ingester
-	retriever *Retriever
-	chat      *ChatOrchestrator
+	cfg         Config
+	store       *Store
+	index       VectorIndex
+	embedder    Embedder
+	ingester    *Ingester
+	retriever   *Retriever
+	chat        *ChatOrchestrator
+	pool        *IngestPool
+	wiki        *WikiStore
+	wikiQ       *WikiQuerier
+	compiler    *Compiler
+	compilePool *CompilePool
 }
 
 // NewService 构造 Service (由 cmd/main.go 调用).
@@ -40,10 +46,11 @@ func NewService(cfg Config) (*Service, error) {
 	idx := NewVectorIndex(emb.Dim(), cfg.IndexType)
 	loadAllSnapshots(cfg.IndexDir, idx)
 	maybeRebuildIfEmpty(context.Background(), store, emb, idx)
+	RagIndexSize.Set(float64(idx.Size()))
 
 	chunker := NewChunker(512, 64)
 	ing := NewIngester(store, chunker, emb, idx, cfg)
-	ret := NewRetriever(emb, idx, store, NewReranker(cfg.EnableRerank), cfg.DefaultTopK)
+	ret := NewRetrieverOpts(emb, idx, store, NewReranker(cfg.EnableRerank), cfg.DefaultTopK, cfg.EnableQueryRewrite)
 
 	var cp ChatProvider
 	switch cfg.ChatProvider {
@@ -52,16 +59,57 @@ func NewService(cfg Config) (*Service, error) {
 	default:
 		cp = NewMockChatProvider()
 	}
-	chatOrch := NewChatOrchestrator(ret, cp, store, cfg.DefaultTopK)
+	chatOrch := NewChatOrchestratorWithHistory(ret, cp, store, cfg.DefaultTopK, cfg.HistoryTurns)
 
-	return &Service{
+	svc := &Service{
 		cfg: cfg, store: store, index: idx, embedder: emb,
 		ingester: ing, retriever: ret, chat: chatOrch,
-	}, nil
+	}
+	if cfg.AsyncIngest {
+		svc.pool = NewIngestPool(IngestPoolConfig{
+			Workers: cfg.IngestWorkers, QueueSize: cfg.IngestQueueSize,
+		}, svc.handleAsyncIngest)
+	}
+	if cfg.EnableWiki {
+		wiki := NewWikiStore(store)
+		svc.wiki = wiki
+		svc.wikiQ = NewWikiQuerier(wiki)
+		var chatForWiki ChatProvider
+		if cfg.WikiLLM {
+			chatForWiki = cp
+		}
+		svc.compiler = NewCompiler(wiki, store, emb, idx, chatForWiki, cfg.WikiLLM)
+		svc.compilePool = NewCompilePool(CompilePoolConfig{
+			Workers: cfg.WikiWorkers, QueueSize: cfg.WikiQueueSize,
+		}, svc.compiler)
+	}
+	return svc, nil
+}
+
+func (s *Service) handleAsyncIngest(ctx context.Context, job ingestJob) {
+	task, err := s.store.LoadTask(job.TaskID)
+	if err != nil {
+		task = &IngestTask{
+			TaskID: job.TaskID, Col: job.Col, DocID: job.DocID,
+			Status: TaskPending, CreatedAt: time.Now().Unix(), UpdatedAt: time.Now().Unix(),
+		}
+	}
+	done, err := s.ingester.IngestWithTask(ctx, task, job.Title, job.Source, job.Text)
+	if err == nil && done != nil && done.Status == TaskSuccess && s.cfg.AutoCompile && s.compilePool != nil {
+		_, _ = s.compilePool.Enqueue(done.Col, done.DocID)
+	}
 }
 
 // Close 释放底层资源.
-func (s *Service) Close() error { return s.store.Close() }
+func (s *Service) Close() error {
+	if s.pool != nil {
+		s.pool.Close()
+	}
+	if s.compilePool != nil {
+		s.compilePool.Close()
+	}
+	return s.store.Close()
+}
 
 // RegisterRoutes 注册路由 (被 cmd/main.go 调用).
 //
@@ -76,14 +124,26 @@ func (s *Service) Close() error { return s.store.Close() }
 //	POST   /api/rag/collections/:col/eval            评测 Recall@K/MRR
 func (s *Service) RegisterRoutes(r *gin.Engine) {
 	r.GET("/healthz", func(c *gin.Context) {
+		status := "ok"
+		kv := "ok"
+		if _, _, err := s.store.Get("__titankv_health_probe__"); err != nil {
+			status = "degraded"
+			kv = "down"
+		}
 		c.JSON(http.StatusOK, gin.H{
-			"status":      "ok",
-			"service":     "rag",
-			"backend":     s.store.Backend(),
-			"embedding":   fmt.Sprintf("%s dim=%d", s.cfg.EmbeddingProvider, s.embedder.Dim()),
-			"chat":        s.cfg.ChatProvider,
-			"index_size":  s.index.Size(),
-			"index_dir":   s.cfg.IndexDir,
+			"status":        status,
+			"service":       "rag",
+			"backend":       s.store.Backend(),
+			"kv":            kv,
+			"embedding":     fmt.Sprintf("%s dim=%d", s.cfg.EmbeddingProvider, s.embedder.Dim()),
+			"chat":          s.cfg.ChatProvider,
+			"index_size":    s.index.Size(),
+			"index_dir":     s.cfg.IndexDir,
+			"async_ingest":  s.cfg.AsyncIngest,
+			"query_rewrite": s.cfg.EnableQueryRewrite,
+			"history_turns": s.cfg.HistoryTurns,
+			"wiki":          s.cfg.EnableWiki,
+			"wiki_llm":      s.cfg.WikiLLM,
 		})
 	})
 
@@ -97,6 +157,7 @@ func (s *Service) RegisterRoutes(r *gin.Engine) {
 	r.POST("/api/rag/tasks/:task_id/resume", s.ResumeTask)
 	r.POST("/api/rag/collections/:col/eval", s.EvalCollection)
 	r.GET("/api/rag/index/snapshot", s.SaveSnapshot)
+	s.registerWikiRoutes(r)
 }
 
 // ---- 入库 ----
@@ -109,15 +170,22 @@ func (s *Service) IngestDocument(c *gin.Context) {
 	}
 
 	var text, title, source string
+	var raw []byte
 	if file, fh, err := c.Request.FormFile("file"); err == nil {
 		defer file.Close()
 		b, _ := io.ReadAll(file)
-		text = string(b)
+		raw = b
 		title = c.PostForm("title")
 		if title == "" {
 			title = fh.Filename
 		}
 		source = fh.Filename
+		parsed, err := ParseDocumentWithCommand(fh.Filename, b, s.cfg.PDFCommand)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		text = parsed.Text
 	} else {
 		var req struct {
 			Title string `json:"title"`
@@ -130,6 +198,7 @@ func (s *Service) IngestDocument(c *gin.Context) {
 		text = req.Text
 		title = req.Title
 		source = "inline"
+		_ = raw
 	}
 
 	if len(text) > s.cfg.MaxDocSizeMB*1024*1024 {
@@ -137,10 +206,38 @@ func (s *Service) IngestDocument(c *gin.Context) {
 		return
 	}
 
+	if s.cfg.AsyncIngest && s.pool != nil {
+		now := time.Now().Unix()
+		docID := uuid.NewString()
+		task := &IngestTask{
+			TaskID: uuid.NewString(), Col: col, DocID: docID,
+			Status: TaskPending, Progress: 0, CreatedAt: now, UpdatedAt: now,
+		}
+		_ = s.store.SaveTask(task)
+		err := s.pool.Enqueue(ingestJob{
+			Col: col, DocID: task.DocID, Title: title, Source: source, Text: text, TaskID: task.TaskID,
+		})
+		if err == ErrIngestQueueFull {
+			RagIngestTotal.WithLabelValues("rejected").Inc()
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": "ingest queue full", "task_id": task.TaskID})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		RagIngestTotal.WithLabelValues("queued").Inc()
+		c.JSON(http.StatusAccepted, task)
+		return
+	}
+
 	task, err := s.ingester.Ingest(c.Request.Context(), col, "", title, source, text)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "task": task})
 		return
+	}
+	if s.cfg.AutoCompile && s.compilePool != nil && task != nil && task.Status == TaskSuccess {
+		_, _ = s.compilePool.Enqueue(task.Col, task.DocID)
 	}
 	c.JSON(http.StatusOK, task)
 }
@@ -182,6 +279,17 @@ func (s *Service) DeleteDocument(c *gin.Context) {
 		return
 	}
 	s.index.ClearByPrefix(col + "/" + doc + "/")
+	// W1.5: wiki pages/edges/raw + per-slug vectors (not whole col/wiki/)
+	if s.wiki != nil {
+		if idx, err := s.wiki.LoadIndex(col); err == nil && idx != nil {
+			for _, e := range idx.Entries {
+				if p, _ := s.wiki.GetPage(col, e.Slug); p != nil && containsString(p.Frontmatter.Sources, doc) {
+					s.index.Delete(wikiChunkID(col, e.Slug))
+				}
+			}
+		}
+		_ = s.wiki.DeleteBySource(col, doc)
+	}
 	// M10: rewrite collection snapshot so restart does not resurrect vectors.
 	if snap, ok := s.index.(SnapshotStore); ok && s.cfg.IndexDir != "" {
 		path := filepath.Join(s.cfg.IndexDir, col+".idx")

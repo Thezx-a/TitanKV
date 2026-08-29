@@ -2,12 +2,16 @@ import { API_BASE, api, apiFetch } from "./api";
 import type {
   ChatEvent,
   ChatRequest,
+  CompileTask,
   DocumentDetail,
   DocumentListResponse,
   IngestResponse,
   IngestTask,
   RetrieveRequest,
   RetrieveResponse,
+  WikiGraphView,
+  WikiIndexDoc,
+  WikiPage,
 } from "./types";
 
 /**
@@ -137,6 +141,43 @@ export const ragApi = {
       }
     }
   },
+
+  /** TitanWiki: 触发异步编译（doc_id 空则编译整库） */
+  wikiCompile: (
+    col: string,
+    body: { doc_id?: string } = {},
+  ): Promise<{ task_id?: string; task_ids?: string[]; status?: string; count?: number }> =>
+    api.post(
+      `/api/rag/collections/${encodeURIComponent(col)}/wiki/compile`,
+      body,
+    ),
+
+  wikiGetTask: (col: string, taskID: string): Promise<CompileTask> =>
+    api.get(
+      `/api/rag/collections/${encodeURIComponent(col)}/wiki/tasks/${encodeURIComponent(taskID)}`,
+    ),
+
+  wikiGetIndex: (col: string): Promise<WikiIndexDoc> =>
+    api.get(`/api/rag/collections/${encodeURIComponent(col)}/wiki/index`),
+
+  wikiGetPage: (col: string, slug: string): Promise<WikiPage> =>
+    api.get(
+      `/api/rag/collections/${encodeURIComponent(col)}/wiki/pages/${encodeURIComponent(slug)}`,
+    ),
+
+  wikiGetGraph: (
+    col: string,
+    slug: string,
+    depth = 1,
+  ): Promise<WikiGraphView> =>
+    api.get(
+      `/api/rag/collections/${encodeURIComponent(col)}/wiki/graph?slug=${encodeURIComponent(slug)}&depth=${depth}`,
+    ),
+
+  wikiListContested: (
+    col: string,
+  ): Promise<{ items: WikiPage[]; count: number }> =>
+    api.get(`/api/rag/collections/${encodeURIComponent(col)}/wiki/contested`),
 };
 
 function readCookie(name: string): string | null {

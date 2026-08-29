@@ -100,9 +100,12 @@ std::string EngineMetrics::prometheusText() const {
     line("titankv_engine_deletes_total", deletes.load());
     line("titankv_engine_flushes_total", flushes.load());
     line("titankv_engine_compactions_total", compactions.load());
+    line("titankv_engine_compaction_failures_total", compaction_failures.load());
     line("titankv_engine_write_stalls_total", write_stalls.load());
     line("titankv_engine_table_cache_hits_total", table_cache_hits.load());
     line("titankv_engine_table_cache_misses_total", table_cache_misses.load());
+    line("titankv_engine_block_cache_hits_total", block_cache_hits.load());
+    line("titankv_engine_block_cache_misses_total", block_cache_misses.load());
     return oss.str();
 }
 

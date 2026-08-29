@@ -3,12 +3,14 @@
 This document describes the C++ storage engine that powers TitanKV, including
 the LSM-Tree layout, on-disk file formats, concurrency model, and durability.
 
-> **Status (latest):** Phase 1 core + MVCC InternalKey pipeline (WP 1.2.2 A/B),
+> **Status (latest, 2026-08-29):** Phase 1 core + MVCC InternalKey pipeline (WP 1.2.2 A/B),
 > Manifest persistence (WP 1.2.4), SSTable block compression (WP 1.2.1),
-> **BlockCache** (decompressed data-block LRU keyed by `(sst_path, offset)`),
+> **BlockCache** + E3 hit/miss metrics (`titankv_engine_block_cache_*`),
 > **MemTable `shared_ptr`** (Get/Iterator snapshot under lock, then lock-free),
+> **Range Delete** E5 (`DB::deleteRange` batched point tombstones ≤10000; not RocksDB range tombstone),
+> Compaction L1→Ln + E4 failure retry/backoff + `compaction_failures` metrics,
 > and **master/sub Reactor** TCP server (epoll LT, `--io-threads` / `--biz-threads`).
-> Still pending: range deletes, column families, OCC transactions, compaction strategy switch.
+> Still pending: column families (CF), OCC transactions, configurable compaction strategy.
 
 ---
 

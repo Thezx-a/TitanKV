@@ -72,7 +72,11 @@ TEST(EngineMetricsTest, PrometheusTextContainsPrefixes) {
     std::string text = m.prometheusText();
     EXPECT_NE(text.find("titankv_engine_puts_total"), std::string::npos);
     EXPECT_NE(text.find("titankv_engine_gets_total"), std::string::npos);
+    EXPECT_NE(text.find("titankv_engine_compactions_total"), std::string::npos);
+    EXPECT_NE(text.find("titankv_engine_compaction_failures_total"), std::string::npos);
     EXPECT_NE(text.find("titankv_engine_table_cache_hits_total"), std::string::npos);
+    EXPECT_NE(text.find("titankv_engine_block_cache_hits_total"), std::string::npos);
+    EXPECT_NE(text.find("titankv_engine_block_cache_misses_total"), std::string::npos);
 }
 
 TEST(EngineMetricsTest, HttpMetricsAndHealthz) {

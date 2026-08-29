@@ -861,4 +861,4 @@ RAG_SERVICE_PORT=8085
 
 ---
 
-*文档结束 — 版本 v2.0，不含任何代码改动，仅作规划。*
+*文档结束 — 版本 v2.1。本文为设计依据；实现以 `services/rag/` 与 `docs/RAG-ARCHITECTURE.md` / `docs/TITANWIKI-ARCHITECTURE.md` 为准。*

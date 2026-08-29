@@ -16,9 +16,13 @@ async function fetchInitialMetrics(): Promise<Metrics> {
     p50_ms: 0,
     p99_ms: 0,
     storage_gb: 0,
+    storage_known: false,
     node_count: 0,
     leader_count: 0,
     timestamp: Math.floor(Date.now() / 1000),
+    qps_source: "none",
+    latency_approx: false,
+    data_backend: "unknown",
   };
 
   try {

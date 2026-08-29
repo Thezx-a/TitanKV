@@ -108,9 +108,15 @@ func Run() {
 		r.Use(middleware.RateLimit(rdb, 100, 10)) // 100 burst, 10/s sustained
 	}
 
-	// 健康检查 (无鉴权)
+	// 健康检查 (无鉴权)；对 data/rag 做真实 probe（Phase O）
 	r.GET("/ping", handler.Ping)
-	r.GET("/healthz", handler.Healthz("0.1.0"))
+	r.GET("/healthz", handler.Healthz("0.1.0", handler.HealthProbes{
+		Targets: map[string]string{
+			"data": cfg.DataServiceURL + "/healthz",
+			"rag":  cfg.RAGServiceURL + "/healthz",
+			"auth": cfg.AuthServiceURL + "/healthz",
+		},
+	}))
 	RegisterClusterRoutes(r)
 
 	// Auth 路由 (无鉴权)

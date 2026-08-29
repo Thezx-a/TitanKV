@@ -3,6 +3,14 @@
 #
 # Each phase is split into work packages (WPs).
 # Mark status with: [ ] todo   [~] in-progress   [x] done
+#
+# Snapshot 2026-08-29 (feat/industrialization):
+#   TitanWiki 演示主链 W0→W1→E5→W2→O→E1→E2→E3→E4→F 已收口。
+#   引擎：RangeDelete(E5) / Compaction L1+(E1) / BlockCache metrics(E3) /
+#         compaction retry(E4) / kBatch bench(E2)。
+#   上层：data_backend 黄条(F1) / wiki CLI(F2) / 诚实 Observability。
+#   仍未做：CF / OCC / 可配置 compaction / gRPC / 多机 Raft / K8s。
+#   详见 docs/TITANWIKI-ARCHITECTURE.md 与 README 诚实边界。
 # =========================================================
 
 ## Phase 0 — Cleanup and restructure
@@ -45,7 +53,12 @@
         * Deleted `packInternalKey()` hash function.
       - Tests: `test_skip_list.cpp` (string keys), `test_internal_key.cpp` (codec),
         `test_sstable_compression.cpp` (round-trip + point lookup + MVCC dedup).
-- [ ] WP 1.2.3  Range Delete (WriteBatch::deleteRange, MemTable tombstones)
+- [x] WP 1.2.3  Range Delete (batched point tombstones via `DB::deleteRange`; E5 2026-08-29)
+      - `DB::deleteRange` + `DBImpl` seek+[start,end) + flush ≤10000/WriteBatch
+      - Network `kDeleteRange` delegates to DB API (was inline full-batch scan)
+      - RAG: `Store.DeletePrefix` / `DeleteCollection` / `WikiStore.DeleteCollection`
+      - Tests: `test_delete_range.cpp` (3 cases); Go `TestDeletePrefixAndWikiCollection`
+      - Honest boundary: not RocksDB-style range tombstone in MemTable; point deletes + batching
 - [x] WP 1.2.4  Manifest persistence (recover Version on restart)
       - Added `core/manifest.{h,cpp}` with appended [crc(4)][size(4)][payload] records.
       - Records cover kReset / kAdd / kDel by level+file_path+file_number.
@@ -60,6 +73,7 @@
       - Flush thread shares ownership via `flush_queue_`; IO without write lock
       - Tests: `test_memtable_snapshot.cpp`
 - [x] WP 1.2.9  BlockCache for decompressed SST data blocks
+- [x] E3 BlockCache hit/miss counters on `/metrics` (`titankv_engine_block_cache_*`) — 2026-08-29
       - `core/block_cache.h` LRU by `(path, offset)` with byte capacity
       - Wired through `SSTableReader::open` / `DBImpl`
       - Tests: `test_block_cache.cpp`
@@ -73,6 +87,8 @@
 - [x] Go client `services/data/minikv_client.go` + `MINIKV_ADDR` wiring
 - [x] Fixed EventLoop UAF (copy callback before invoke) — connection close SIGSEGV
 - [x] Compaction L0→L1 actually merges entries (no longer empty stub)
+- [x] Compaction L1→L2 (`compactLevel`) + tombstone survive reopen — E1 2026-08-29 (`CompactionL1Test`)
+- [x] Compaction failure retry + backoff + metrics — E4 2026-08-29 (`CompactionRetryTest`)
 - [x] Local bench numbers in `minikv/docs/benchmark.md` + `scripts/bench_minikv.sh`
 - [x] Smoke: `scripts/e2e_smoke.sh`
 - [ ] `proto/` gRPC + cgo embedded mode (optional upgrade path)
@@ -109,6 +125,7 @@
 - [x] App structure (App Router, Tailwind, TanStack Query)
 - [x] Login + route guard
 - [x] Dashboard live metrics (SSE)
+- [x] F1 Data backend=memory yellow bar + RAG/wiki task status — 2026-08-29
 - [x] Data Explorer (browse KV / Scan)
 - [x] Collection management (incl. type=rag)
 - [x] RAG pages (`web/app/dashboard/rag/*`) + chat SSE UI
@@ -126,7 +143,7 @@
 
 ## Phase 8 — CLI + multi-language SDK + docs
 
-- [x] `client-cli` Cobra `keyforge` (ping/put/get/scan) against gateway
+- [x] `client-cli` Cobra `keyforge` (ping/put/get/scan + wiki pages/ask) against gateway — F2 2026-08-29
 - [ ] cluster/members/admin subcommands
 - [ ] TypeScript SDK generated from OpenAPI
 - [ ] Python SDK generated from OpenAPI

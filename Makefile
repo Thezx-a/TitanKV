@@ -83,6 +83,7 @@ MINIKV_BIN  ?= $(CMAKE_BUILD_DIR)/minikv/minikv_server
 MINIKV_ADDR ?= 127.0.0.1:8888
 MINIKV_DB   ?= ./data/minikv_data
 MINIKV_PORT ?= 8888
+MINIKV_METRICS_PORT ?= 9091
 # 方案一：skynet 占对外 :8080，Gin 内网 :18080
 SKYNET_BIN          ?= $(CMAKE_BUILD_DIR)/skynet/skynet_gateway
 SKYNET_CONFIG       ?= $(CURDIR)/skynet/gateway/gateway.yaml
@@ -108,9 +109,9 @@ run-observ: ## Run observability service (Phase 4, port 8084)
 run-rag: ## Run RAG service (port 8085)
 	MINIKV_ADDR=$(MINIKV_ADDR) $(GO) run ./services/rag/cmd
 
-run-minikv: cmake-build ## Run C++ minikv_server (default :8888)
+run-minikv: cmake-build ## Run C++ minikv_server (default :8888, metrics :9091)
 	@mkdir -p $(MINIKV_DB)
-	$(MINIKV_BIN) --host 0.0.0.0 --port $(MINIKV_PORT) --db $(MINIKV_DB)
+	$(MINIKV_BIN) --host 0.0.0.0 --port $(MINIKV_PORT) --db $(MINIKV_DB) --metrics-port $(MINIKV_METRICS_PORT)
 
 run-skynet: cmake-build ## Run skynet front proxy (public :8080 → Gin :18080)
 	@test -x "$(SKYNET_BIN)" || $(MAKE) cmake-build
@@ -123,7 +124,7 @@ run-all: ## Run minikv + Go services + skynet front proxy (Ctrl+C stops all)
 	@echo "Starting minikv + Go + skynet front proxy. Public entry :$(PUBLIC_GATEWAY_PORT) → Gin $(GIN_INTERNAL_ADDR)"
 	@mkdir -p $(MINIKV_DB)
 	@if [ ! -x "$(MINIKV_BIN)" ] || [ ! -x "$(SKYNET_BIN)" ]; then $(MAKE) cmake-build; fi
-	@$(MINIKV_BIN) --host 127.0.0.1 --port $(MINIKV_PORT) --db $(MINIKV_DB) & echo $$! > /tmp/titankv-minikv.pid
+	@$(MINIKV_BIN) --host 127.0.0.1 --port $(MINIKV_PORT) --db $(MINIKV_DB) --metrics-port $(MINIKV_METRICS_PORT) & echo $$! > /tmp/titankv-minikv.pid
 	@sleep 0.5
 	@MINIKV_ADDR=$(MINIKV_ADDR) $(GO) run ./cmd/auth & echo $$! > /tmp/titankv-auth.pid
 	@MINIKV_ADDR=$(MINIKV_ADDR) $(GO) run ./cmd/data & echo $$! > /tmp/titankv-data.pid

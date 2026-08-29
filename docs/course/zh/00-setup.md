@@ -147,7 +147,7 @@ WSL2 装好后，我们要在 Windows 上的 VSCode 里直接打开 WSL2 内的�
 
 ```bash
 # 在 WSL2 终端中执行
-cd /mnt/d/SpectrumCore
+cd /mnt/d/WSL/TitanKV
 code .
 ```
 
@@ -161,7 +161,7 @@ code .
 
 ```bash
 # 在 WSL2 中，把 Windows 项目目录软链到 home
-ln -s /mnt/d/SpectrumCore ~/titan-kv
+ln -s /mnt/d/WSL/TitanKV ~/titan-kv
 cd ~/titan-kv
 ```
 

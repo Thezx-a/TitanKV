@@ -8,13 +8,17 @@ type KVPair struct {
 
 // Metrics 控制台仪表盘指标 (与 observability service 一致).
 type Metrics struct {
-	QPS          float64 `json:"qps"`
-	P50LatencyMs float64 `json:"p50_ms"`
-	P99LatencyMs float64 `json:"p99_ms"`
-	StorageGB    float64 `json:"storage_gb"`
-	NodeCount    int     `json:"node_count"`
-	LeaderCount  int     `json:"leader_count"`
-	Timestamp    int64   `json:"timestamp"`
+	QPS           float64 `json:"qps"`
+	P50LatencyMs  float64 `json:"p50_ms"`
+	P99LatencyMs  float64 `json:"p99_ms"`
+	StorageGB     float64 `json:"storage_gb"`
+	StorageKnown  bool    `json:"storage_known"`
+	NodeCount     int     `json:"node_count"`
+	LeaderCount   int     `json:"leader_count"`
+	Timestamp     int64   `json:"timestamp"`
+	QPSSource     string  `json:"qps_source"`
+	LatencyApprox bool    `json:"latency_approx"`
+	DataBackend   string  `json:"data_backend"` // minikv | memory | unknown
 }
 
 // Collection 元数据.

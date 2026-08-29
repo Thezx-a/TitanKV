@@ -13,8 +13,8 @@ import (
 
 // Ingester 文档入库编排 (RagKv.md §8.1).
 //
-// MVP 为同步实现 (不开异步 goroutine), 流程仍按:
-// 解析→清洗→去重→切块→批量 embedding→WriteBatch(minikv)→更新 SideIndex→快照.
+// 流程: 解析→清洗→去重→切块→批量 embedding→WriteBatch(minikv)→更新 SideIndex→快照.
+// HTTP 层可同步调用 Ingest, 或经 IngestPool 异步调度.
 type Ingester struct {
 	store    *Store
 	chunker  *Chunker
@@ -45,8 +45,22 @@ func (g *Ingester) Ingest(ctx context.Context, col, docID, title, source, text s
 		Status: TaskPending, Progress: 0, CreatedAt: now, UpdatedAt: now,
 	}
 	_ = g.store.SaveTask(task)
+	return g.runIngest(ctx, task, title, source, text)
+}
 
-	// 1) 去重: 同 collection 内 content_hash 命中则直接返回旧 doc
+// IngestWithTask continues a pre-created pending task (async path).
+func (g *Ingester) IngestWithTask(ctx context.Context, task *IngestTask, title, source, text string) (*IngestTask, error) {
+	if task == nil {
+		return nil, fmt.Errorf("nil task")
+	}
+	return g.runIngest(ctx, task, title, source, text)
+}
+
+func (g *Ingester) runIngest(ctx context.Context, task *IngestTask, title, source, text string) (*IngestTask, error) {
+	col, docID := task.Col, task.DocID
+	now := time.Now().Unix()
+
+	// 1) 去重
 	h := sha256.Sum256([]byte(text))
 	contentHash := hex.EncodeToString(h[:])
 	if existing := g.findByHash(col, contentHash); existing != nil {
@@ -54,6 +68,7 @@ func (g *Ingester) Ingest(ctx context.Context, col, docID, title, source, text s
 		task.Progress = 100
 		task.DocID = existing.DocID
 		_ = g.store.SaveTask(task)
+		RagIngestTotal.WithLabelValues("dedup").Inc()
 		return task, nil
 	}
 
@@ -63,20 +78,31 @@ func (g *Ingester) Ingest(ctx context.Context, col, docID, title, source, text s
 	// 2) 切块
 	chunks := g.chunker.Split(text)
 	if len(chunks) == 0 {
+		RagIngestTotal.WithLabelValues("failed").Inc()
 		return g.failTask(task, "empty document after chunking")
 	}
 
-	// 3) 批量 embedding + 组装 ChunkRecord (向量暂存, 先写 minikv 再进 SideIndex)
+	// 3) 批量 embedding
+	texts := make([]string, len(chunks))
+	for i, c := range chunks {
+		texts[i] = c.Text
+	}
+	vecs, err := EmbedTexts(ctx, g.embedder, texts, g.cfg.EmbeddingBatch)
+	if err != nil {
+		RagIngestTotal.WithLabelValues("failed").Inc()
+		return g.failTask(task, fmt.Sprintf("embed: %v", err))
+	}
+	if len(vecs) != len(chunks) {
+		RagIngestTotal.WithLabelValues("failed").Inc()
+		return g.failTask(task, "embed batch size mismatch")
+	}
+
 	records := make([]ChunkRecord, 0, len(chunks))
 	vectors := make(map[string][]float32, len(chunks))
 	for i, c := range chunks {
-		vec, err := g.embedder.Embed(ctx, c.Text)
-		if err != nil {
-			return g.failTask(task, fmt.Sprintf("embed chunk %d: %v", i, err))
-		}
 		cid := chunkID(col, docID, c.Seq)
-		cp := make([]float32, len(vec))
-		copy(cp, vec)
+		cp := make([]float32, len(vecs[i]))
+		copy(cp, vecs[i])
 		vectors[cid] = cp
 		records = append(records, ChunkRecord{
 			ChunkID: cid, Col: col, DocID: docID, Seq: c.Seq,
@@ -84,32 +110,33 @@ func (g *Ingester) Ingest(ctx context.Context, col, docID, title, source, text s
 		})
 	}
 
-	// 4) 持久化: chunk 正文 + meta + status 进 minikv (WriteBatch 原子)
+	// 4) 持久化 WriteBatch
 	meta := &DocumentMeta{
 		DocID: docID, Col: col, Title: title, Source: source,
 		ContentHash: contentHash, ChunkCount: len(records), CreatedAt: now,
 	}
 	if err := g.store.SaveDocument(meta, records, TaskRunning); err != nil {
+		RagIngestTotal.WithLabelValues("failed").Inc()
 		return g.failTask(task, err.Error())
 	}
-	// minikv 成功后更新 SideIndex (双写一致性: 先 KV 后向量)
 	for cid, vec := range vectors {
 		g.index.Add(cid, vec)
 	}
 	if err := g.store.Put(docStatusKey(col, docID), TaskSuccess); err != nil {
+		RagIngestTotal.WithLabelValues("failed").Inc()
 		return g.failTask(task, err.Error())
 	}
 
-	// 5) 写 SideIndex 快照 (失败不阻塞, 重启可从 minikv 重建)
 	_ = g.saveSnapshot(col)
+	RagIndexSize.Set(float64(g.index.Size()))
 
 	task.Status = TaskSuccess
 	task.Progress = 100
 	_ = g.store.SaveTask(task)
+	RagIngestTotal.WithLabelValues("success").Inc()
 	return task, nil
 }
 
-// findByHash 在 collection 内找 content_hash 相同的文档 (去重).
 func (g *Ingester) findByHash(col, hash string) *DocumentMeta {
 	docs, err := g.store.ListDocuments(col)
 	if err != nil {
@@ -123,8 +150,6 @@ func (g *Ingester) findByHash(col, hash string) *DocumentMeta {
 	return nil
 }
 
-// saveSnapshot 写当前 collection 的 SideIndex 快照.
-// 只导出本 col 的向量 (chunk_id 前缀 "col/").
 func (g *Ingester) saveSnapshot(col string) error {
 	path := fmt.Sprintf("%s/%s.idx", g.cfg.IndexDir, col)
 	if snap, ok := g.index.(SnapshotStore); ok {
@@ -133,7 +158,6 @@ func (g *Ingester) saveSnapshot(col string) error {
 	return nil
 }
 
-// failTask 置任务失败并返回 error.
 func (g *Ingester) failTask(t *IngestTask, msg string) (*IngestTask, error) {
 	t.Status = TaskFailed
 	t.Error = msg
@@ -150,7 +174,6 @@ func (g *Ingester) ResumeIngest(ctx context.Context, taskID string) (*IngestTask
 	if task.Status == TaskSuccess {
 		return task, nil
 	}
-	// Re-run from stored doc metadata if chunks exist on disk
 	chunks, _ := g.store.ListChunks(task.Col, task.DocID)
 	if len(chunks) > 0 {
 		task.Status = TaskSuccess
@@ -163,6 +186,7 @@ func (g *Ingester) ResumeIngest(ctx context.Context, taskID string) (*IngestTask
 	_ = g.store.SaveTask(task)
 	return task, fmt.Errorf("task %s has no persisted chunks; re-submit document", taskID)
 }
+
 func ensureColName(col string) error {
 	if col == "" || strings.ContainsAny(col, "/:") {
 		return fmt.Errorf("invalid collection name: %q", col)

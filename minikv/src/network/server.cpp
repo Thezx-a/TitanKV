@@ -266,37 +266,11 @@ std::string Server::processRequest(const std::string& rawData) {
             return encodeResponse(ResponseStatus::kOk, Slice());
         }
         case Cmd::kDeleteRange: {
+            // key = start, value = end; half-open [start, end). Delegates to DBImpl::deleteRange
+            // (E5 / T2.8 batched tombstones).
             std::string start(key, hdr->key_len);
             std::string end(val, valLen);
-            auto it = db_->newIterator(ropts);
-            it->seekToFirst();
-            WriteBatch batch;
-            std::string last_user;
-            while (it->valid()) {
-                Slice ik = it->key();
-                if (ik.size() < core::kTrailerBytes) {
-                    it->next();
-                    continue;
-                }
-                Slice uk = core::InternalKeyUserKey(ik);
-                std::string uks = uk.toString();
-                if (!start.empty() && uks < start) {
-                    it->next();
-                    continue;
-                }
-                if (!end.empty() && uks >= end) break;
-                if (uks == last_user) {
-                    it->next();
-                    continue;
-                }
-                last_user = uks;
-                batch.del(Slice(uks));
-                it->next();
-            }
-            if (batch.count() == 0) {
-                return encodeResponse(ResponseStatus::kOk, Slice());
-            }
-            Status s = db_->write(wopts, batch);
+            Status s = db_->deleteRange(wopts, Slice(start), Slice(end));
             if (!s.ok()) {
                 return encodeResponse(ResponseStatus::kError, Slice(s.message()));
             }

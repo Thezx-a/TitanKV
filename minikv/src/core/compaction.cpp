@@ -26,11 +26,17 @@ void unlinkSstAndBloom(const std::string& sst_path) {
 }
 }  // namespace
 
+int compactionRetryBackoffMs(int consecutive_failures) {
+    if (consecutive_failures <= 1) return 100;
+    int shift = consecutive_failures - 1;
+    if (shift > 5) shift = 5;  // 100 << 5 = 3200
+    return 100 << shift;
+}
 
 CompactionManager::CompactionManager(Version* version, const std::string& db_path,
                                      size_t block_size, int max_level,
                                      size_t l0_trigger, BlockCache* block_cache,
-                                     TableCache* table_cache)
+                                     TableCache* table_cache, int fail_inject)
     : version_(version),
       db_path_(db_path),
       block_size_(block_size),
@@ -39,7 +45,8 @@ CompactionManager::CompactionManager(Version* version, const std::string& db_pat
       block_cache_(block_cache),
       table_cache_(table_cache),
       running_(false),
-      triggered_(false) {}
+      triggered_(false),
+      fail_inject_(fail_inject) {}
 
 CompactionManager::~CompactionManager() { stop(); }
 
@@ -54,6 +61,10 @@ void CompactionManager::stop() {
 }
 
 void CompactionManager::triggerCompaction() { triggered_ = true; }
+
+void CompactionManager::injectFailures(int n) {
+    fail_inject_.store(n < 0 ? 0 : n, std::memory_order_relaxed);
+}
 
 bool CompactionManager::mayHaveOlderVersionsBelow(int dst_level) const {
     // Honest LevelDB-style bound: only the bottommost level can drop tombstones.
@@ -83,13 +94,20 @@ void CompactionManager::invalidateCache(const std::vector<std::string>& paths) {
 void CompactionManager::compactionLoop() {
     while (running_) {
         bool did_work = false;
+        int backoff_ms = 100;
         if (triggered_ || version_->shouldCompactL0(l0_trigger_)) {
             triggered_ = false;
             Status s = compactL0();
             if (!s.ok()) {
                 ++compaction_failures_;
-                std::cerr << "Compaction L0 failed: " << s.message() << std::endl;
+                utils::EngineMetrics::instance().compaction_failures.fetch_add(
+                    1, std::memory_order_relaxed);
+                std::cerr << "Compaction L0 failed: " << s.message()
+                          << " (retry backoff "
+                          << compactionRetryBackoffMs(compaction_failures_)
+                          << "ms)" << std::endl;
                 triggered_ = true;  // retry on next poll
+                backoff_ms = compactionRetryBackoffMs(compaction_failures_);
             } else {
                 compaction_failures_ = 0;
                 did_work = true;
@@ -100,9 +118,14 @@ void CompactionManager::compactionLoop() {
                 Status s = compactLevel(lvl);
                 if (!s.ok()) {
                     ++compaction_failures_;
+                    utils::EngineMetrics::instance().compaction_failures.fetch_add(
+                        1, std::memory_order_relaxed);
                     std::cerr << "Compaction L" << lvl << " failed: " << s.message()
-                              << std::endl;
+                              << " (retry backoff "
+                              << compactionRetryBackoffMs(compaction_failures_)
+                              << "ms)" << std::endl;
                     triggered_ = true;
+                    backoff_ms = compactionRetryBackoffMs(compaction_failures_);
                 } else {
                     compaction_failures_ = 0;
                     did_work = true;
@@ -110,7 +133,7 @@ void CompactionManager::compactionLoop() {
             }
         }
         (void)did_work;
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms));
     }
 }
 
@@ -132,6 +155,16 @@ Status CompactionManager::mergeLevelFiles(int src_level,
     if (src_files.empty()) return Status::Ok();
     const int dst_level = src_level + 1;
     if (dst_level > max_level_) return Status::Ok();
+
+    // E4: deterministic failure inject for retry tests (production: 0).
+    {
+        int left = fail_inject_.load(std::memory_order_relaxed);
+        if (left > 0 &&
+            fail_inject_.compare_exchange_strong(left, left - 1,
+                                                 std::memory_order_relaxed)) {
+            return Status::IOError("injected compaction failure");
+        }
+    }
 
     compacting_.store(true);
     struct CompactingGuard {

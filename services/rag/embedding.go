@@ -24,6 +24,47 @@ type Embedder interface {
 	Dim() int
 }
 
+// BatchEmbedder optionally embeds many texts in one call (OpenAI batch).
+type BatchEmbedder interface {
+	Embedder
+	EmbedTexts(ctx context.Context, texts []string) ([][]float32, error)
+}
+
+// EmbedTexts batches embedding. Uses BatchEmbedder when available; otherwise
+// loops in groups of batchSize (default 32).
+func EmbedTexts(ctx context.Context, e Embedder, texts []string, batchSize int) ([][]float32, error) {
+	if batchSize <= 0 {
+		batchSize = 32
+	}
+	if len(texts) == 0 {
+		return nil, nil
+	}
+	if be, ok := e.(BatchEmbedder); ok {
+		out := make([][]float32, 0, len(texts))
+		for i := 0; i < len(texts); i += batchSize {
+			end := i + batchSize
+			if end > len(texts) {
+				end = len(texts)
+			}
+			part, err := be.EmbedTexts(ctx, texts[i:end])
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, part...)
+		}
+		return out, nil
+	}
+	out := make([][]float32, len(texts))
+	for i, t := range texts {
+		v, err := e.Embed(ctx, t)
+		if err != nil {
+			return nil, fmt.Errorf("embed[%d]: %w", i, err)
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
 // ---- hashEmbedder: 无外部依赖的确定性伪 embedding ----
 //
 // 词袋 + FNV-1a: 按非空 token 分词, 每个 token hash 到一维 (mod dim),
@@ -118,10 +159,28 @@ type embedResp struct {
 }
 
 func (e *openAIEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
-	if e.apiKey == "" {
-		return nil, fmt.Errorf("openai embedder: RAG_EMBEDDING_API_KEY 未配置")
+	out, err := e.EmbedTexts(ctx, []string{text})
+	if err != nil {
+		return nil, err
 	}
-	body, _ := json.Marshal(map[string]any{"model": e.model, "input": text})
+	if len(out) == 0 {
+		return nil, fmt.Errorf("openai embedder: empty response")
+	}
+	return out[0], nil
+}
+
+func (e *openAIEmbedder) EmbedTexts(ctx context.Context, texts []string) ([][]float32, error) {
+	if e.apiKey == "" {
+		return nil, fmt.Errorf("openai embedder: RAG_EMBEDDING_API_KEY not set")
+	}
+	if len(texts) == 0 {
+		return nil, nil
+	}
+	var input any = texts
+	if len(texts) == 1 {
+		input = texts[0]
+	}
+	body, _ := json.Marshal(map[string]any{"model": e.model, "input": input})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.apiBase+"/embeddings", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -141,10 +200,14 @@ func (e *openAIEmbedder) Embed(ctx context.Context, text string) ([]float32, err
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, fmt.Errorf("openai embedder: decode: %w", err)
 	}
-	if len(out.Data) == 0 {
-		return nil, fmt.Errorf("openai embedder: empty response")
+	if len(out.Data) != len(texts) {
+		return nil, fmt.Errorf("openai embedder: got %d vectors for %d texts", len(out.Data), len(texts))
 	}
-	return out.Data[0].Embedding, nil
+	vecs := make([][]float32, len(out.Data))
+	for i, d := range out.Data {
+		vecs[i] = d.Embedding
+	}
+	return vecs, nil
 }
 
 // ---- 缓存装饰器: query 向量缓存到 minikv, 命中跳过远端 ----

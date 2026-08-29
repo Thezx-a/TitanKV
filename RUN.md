@@ -39,7 +39,7 @@ cd titan-kv
 ```bash
 rsync -a --delete \
   --exclude 'build' --exclude 'build-*' --exclude 'web/node_modules' --exclude 'web/.next' \
-  /mnt/d/SpectrumCore/ ~/titan-kv/
+  /mnt/d/WSL/TitanKV/ ~/titan-kv/
 cd ~/titan-kv
 ```
 
@@ -143,7 +143,10 @@ curl -s http://127.0.0.1:8080/ping
 | Observability | 8084 |
 | RAG | 8085 |
 | minikv_server（TCP） | 8888 |
+| minikv `/metrics` `/healthz` | 9091 |
 | Raft 教学节点（可选 `cmd/raft`） | 8090/8091 |
+
+> `make run-all` 已纳入 **rag**（:8085）与 minikv `--metrics-port 9091`；Observability 默认刮 `MINIKV_METRICS_URL=http://127.0.0.1:9091`。
 
 ---
 
@@ -178,7 +181,7 @@ make docker-up
 | `gateway/` | Go Gin 网关库 | 由 `cmd/gateway` 引用 |
 | `services/*` | Auth / Data / Meta / Observ / RAG 库 | 由 `cmd/*` 或 `services/rag/cmd` 引用 |
 | `distributed/` | hashicorp/raft 教学模块（1-node / JoinCluster） | `go test ./distributed/...` / `cmd/raft` |
-| `client-cli/` | Cobra CLI `keyforge`（put/get/scan/ping） | `go run ./client-cli` |
+| `client-cli/` | Cobra CLI `keyforge`（put/get/scan/ping + `wiki pages`/`wiki ask`） | `go run ./client-cli` |
 | `web/` | Next.js 控制台 | `npm run dev` |
 | `deploy/dev/` | 本地依赖 compose | `make docker-up` |
 | `docs/course/` | 双语课程 | 阅读即可 |

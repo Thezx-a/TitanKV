@@ -176,9 +176,9 @@ titan-kv/
 │   ├── observability/  #   metrics / trace 聚合
 │   └── rag/            #   RAG ingest / retrieve / chat (:8085)
 ├── client-go/titan/     # Go SDK / Go SDK
-├── client-cli/         # Cobra CLI `keyforge`（put/get/scan/ping）
+├── client-cli/         # Cobra CLI `keyforge`（put/get/scan/ping + wiki pages/ask）
 ├── web/                # Next.js 14 管理控制台 / Next.js 14 admin console
-│   ├── app/           #   App Router (dashboard / login)
+│   ├── app/           #   App Router (dashboard / login / rag / wiki)
 │   ├── components/    #   live-metrics / metrics-card / nav / providers
 │   └── lib/           #   api.ts / types.ts
 ├── distributed/        # Raft 教学模块（1-node / JoinCluster）
@@ -192,6 +192,7 @@ titan-kv/
 │   ├── REFACTORING.md #   重构计划 / refactoring plan
 │   ├── STORAGE_ENGINE.md
 │   ├── RAG-ARCHITECTURE.md
+│   ├── TITANWIKI-ARCHITECTURE.md  # TitanWiki 编译型知识库
 │   └── *.png            #   架构示意 PNG
 ├── tests/course/       # 课程配套手撕题测试 (7 文件 / 37 用例)
 ├── CMakeLists.txt      # 顶层 CMake 聚合 / top-level CMake
@@ -210,15 +211,18 @@ titan-kv/
 | Phase | 描述 / Description | 状态 / Status |
 |---|---|---|
 | Phase 0 | 清理 + 仓库重构 / Cleanup + repo restructure | ✅ done |
-| Phase 1 | C++ 存储引擎升级（MVCC / WAL / Compaction / CF） / C++ storage engine upgrade | ✅ done |
+| Phase 1 | C++ 存储引擎（MVCC / WAL / Compaction / BlockCache / RangeDelete） | ✅ **较完善\*** — CF / OCC / 可配置 compaction **未做**（勿把 README 旧「含 CF」读成已完成） |
 | Phase 2 | C++ 引擎接入 Go Data（TCP 协议 / 规划中的 gRPC） | ✅ **MVP done** — `MINIKV_ADDR` → `minikv_server` 原生 TCP；gRPC/cgo 仍为后续增强 |
 | Phase 3 | Go API 网关 + Auth 服务（JWT/RBAC/APIKey） / Go gateway + auth | ✅ **MVP done** — `gateway/` + `services/auth/` |
-| Phase 4 | Go data / meta / observability 服务 / Go data/meta/observability | ✅ **MVP done** — Data 默认可接 minikv；无 `MINIKV_ADDR` 时回退内存 |
+| Phase 4 | Go data / meta / observability 服务 / Go data/meta/observability | ✅ **MVP done** — Data 默认可接 minikv；无 `MINIKV_ADDR` 时回退 memory（仪表盘黄条） |
 | Phase 5 | 分布式层：hashicorp/raft（教学）+ 分片辅助 | ✅ **教学 MVP** — `distributed/` + `cmd/raft`；多机生产集群仍为规划 |
-| Phase 6 | Next.js 管理控制台（含 RAG / Cluster 页） | ✅ **MVP done** — `web/` |
+| Phase 6 | Next.js 管理控制台（含 RAG / Wiki / Cluster 页） | ✅ **MVP done** — `web/`；F1 memory 黄条 + 任务态 |
 | Phase 6.5 | RAG 检索服务（side index + HNSW + SSE chat） | ✅ **MVP done** — `services/rag/` :8085 |
-| Phase 7 | 可观测性 + Kubernetes + CI/CD | ⏳ planned |
-| Phase 8 | CLI + 多语言 SDK + 文档 | ✅ **CLI MVP** — `client-cli/`；多语言 SDK 仍为规划 |
+| Phase 6.6 | TitanWiki（异步 compile + wiki-first ask） | ✅ **演示落地** — W0→W2 + Phase F 主链收口；见 `docs/TITANWIKI-ARCHITECTURE.md` |
+| Phase 7 | 可观测性 + Kubernetes + CI/CD | ⏳ planned（进程内刮数已诚实化；K8s/全链路 tracing 未做） |
+| Phase 8 | CLI + 多语言 SDK + 文档 | ✅ **CLI MVP** — `keyforge` 含 `wiki pages/ask`；多语言 SDK 仍为规划 |
+
+> **\*较完善** = 正确性契约 + 回归测可演示，**不是**云厂商生产完备。
 
 > **MVP 说明 / MVP note**：`make run-all` 对外 **:8080 = skynet_gateway**（epoll ET + C++20 协程）→ Gin `:18080` → Auth/Data/Meta/Observ/**RAG**；启动 `minikv_server`，Data/RAG 经 `MINIKV_ADDR` 落 LSM。skynet 不做 JWT/限流。Raft 为教学实验，不是多机生产集群。
 >
@@ -445,23 +449,40 @@ curl -s http://localhost:8080/api/data/kv/foo \
 
 ### 中文
 
-TitanKV 的可观测性栈基于三大件：
+TitanKV 的可观测性分两层：
 
-- **Prometheus**：抓取各服务的 `/metrics` 端点（`services/observability/metrics.go` 暴露 Prometheus 指标）。
-- **Grafana**：基于 Prometheus 数据源做仪表盘可视化。
-- **Jaeger**：分布式链路追踪，跨网关 → 微服务 → 存储引擎的请求关联。
+- **进程内刮数（默认可用）**：`services/observability` 刮各服务 `/metrics`，QPS = Prometheus counter **Δ/Δt**（`qps_source=prometheus_delta`）。延迟在仅有 sum/count 时标 `latency_approx=true`，**不伪造 P99**；`storage_gb` 未知则为 0 + `storage_known=false`；`leader_count=0`（Raft 不在生产数据路径）。
+- **可选 Docker 栈**：Prometheus / Grafana / Jaeger 镜像可通过 `make docker-up` 拉起，**不等于**业务代码已全量埋点 Jaeger span。Phase 7（K8s + 完整链路）仍为 planned。
 
-本地一键拉起：`make docker-up`（依赖 [`deploy/dev/docker-compose.yml`](deploy/dev/docker-compose.yml) + [`deploy/dev/prometheus.yml`](deploy/dev/prometheus.yml)）。Grafana 默认 `http://localhost:3001`，Jaeger UI 默认 `http://localhost:16686`。
+本地一键拉起可选栈：`make docker-up`（[`deploy/dev/docker-compose.yml`](deploy/dev/docker-compose.yml)）。Grafana 默认 `http://localhost:3001`，Jaeger UI 默认 `http://localhost:16686`。
 
 ### English
 
-TitanKV's observability stack rests on three pillars:
+Observability has two layers:
 
-- **Prometheus** scrapes each service's `/metrics` endpoint (`services/observability/metrics.go` exposes Prometheus metrics).
-- **Grafana** visualizes the Prometheus data source.
-- **Jaeger** provides distributed tracing across gateway → service → storage engine.
+- **In-process scrape (default)**: `services/observability` scrapes `/metrics`; QPS is Prometheus counter **Δ/Δt**. Latency is marked approximate when only sum/count exist — **no fake P99**. Unknown storage stays 0; `leader_count=0` (Raft is teaching-only).
+- **Optional Docker stack**: Prometheus / Grafana / Jaeger via `make docker-up` — **not** a claim that every request is traced end-to-end. Full K8s/tracing remains planned (Phase 7).
 
-Bring it up locally with `make docker-up` (driven by [`deploy/dev/docker-compose.yml`](deploy/dev/docker-compose.yml) + [`deploy/dev/prometheus.yml`](deploy/dev/prometheus.yml)). Grafana defaults to `http://localhost:3001`, Jaeger UI to `http://localhost:16686`.
+---
+
+## 诚实边界 / Honest limits
+
+面试与演示请按下列边界陈述（勿夸大）：
+
+| 能力 | 实际 |
+|------|------|
+| `data_backend` | Metrics 暴露 `minikv` / `memory` / `unknown`；memory 时仪表盘黄条 |
+| Embedding | 默认可用 local **hash embed**（演示）；高质量召回需配置 OpenAI 等真实 embed |
+| Chat / Wiki 摘要 | 可用 **mock chat**；`RAG_WIKI_LLM=false` 时 Wiki 摘要走规则，非生产级 LLM 合并 |
+| TitanWiki | **半自动编译**：异步 CompilePool；冲突标 contested，不覆盖原文 |
+| 向量索引 | 旁路 HNSW / 文件快照，**向量不进 MiniKV LSM** |
+| Range Delete | 分批点删 tombstone（≤10000/batch），**不是** RocksDB MemTable range tombstone |
+| Raft | `distributed/` **教学实验**；简历与主路径不写 Raft 多机生产 |
+| 仪表盘 QPS | 刮真实 Prometheus；首帧可能为 0（需两次采样算 Δ） |
+| Jaeger | compose 可起 UI；业务全链路 span **未**作为 MVP 验收 |
+| Column Family / OCC | **未实现** — 勿按旧 Phase 1「含 CF」口径吹 |
+
+产品一句话：别人每次从原文向量「重新发现」；TitanWiki 先编译 wiki 页，问答优先已沉淀知识，向量兜底。
 
 ---
 
@@ -470,13 +491,14 @@ Bring it up locally with `make docker-up` (driven by [`deploy/dev/docker-compose
 | Phase | 内容 / Scope | 状态 / Status |
 |---|---|---|
 | 0 | 仓库重构 / Repo restructure | ✅ done |
-| 1 | C++ 存储引擎（WAL/MemTable/SST/Compaction/MVCC） / C++ storage engine | ✅ done |
-| 2 | gRPC server 接 minikv + Go cgo 客户端 / gRPC server wrapping minikv | ⏳ planned |
+| 1 | C++ 存储引擎（WAL/MemTable/SST/Compaction/MVCC/BlockCache/RangeDelete） | ✅ 较完善*（CF/OCC 未做） |
+| 2 | gRPC server 接 minikv + Go cgo 客户端 / gRPC wrapping minikv | ⏳ planned（TCP MVP 已够演示） |
 | 3 | Go 网关 + Auth（JWT/RBAC/APIKey） / Go gateway + auth | ✅ MVP done |
 | 4 | Go data/meta/observability 服务 / Go services | ✅ MVP done |
 | 5 | Raft 教学实验 + 分片辅助（多机生产仍规划） | ✅ teaching MVP |
-| 6 | Next.js 管理控制台（含 RAG/Cluster） | ✅ MVP done |
+| 6 | Next.js 管理控制台（含 RAG/Wiki/Cluster） | ✅ MVP done |
 | 6.5 | RAG 服务（HNSW side index + SSE） | ✅ MVP done |
+| 6.6 | TitanWiki（compile/ask/graph + CLI） | ✅ 演示落地 |
 | 7 | K8s 部署 + Prometheus/Grafana/Jaeger + CI/CD | ⏳ planned |
 | 8 | Cobra CLI MVP + 多语言 SDK + 文档 | ✅ CLI MVP / SDK planned |
 

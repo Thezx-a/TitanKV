@@ -8,6 +8,7 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/google/snappy.git
     GIT_TAG        1.2.1
     GIT_SHALLOW    TRUE
+    GIT_SUBMODULES ""   # skip nested googletest/benchmark (TLS-fragile on WSL)
 )
 # Avoid building snappy's own tests/benchmarks; just the library.
 set(SNAPPY_BUILD_TESTS  OFF CACHE BOOL "" FORCE)

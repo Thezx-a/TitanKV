@@ -79,6 +79,21 @@ export function LiveMetrics({ initial }: LiveMetricsProps) {
         </span>
       </div>
 
+      {/* F1: Data backend=memory → 诚实黄条（非生产 LSM） */}
+      {metrics.data_backend === "memory" && (
+        <div
+          role="status"
+          className="rounded-md border border-amber-500/50 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+        >
+          Data 后端为 <code className="font-mono">memory</code>
+          ：未接 minikv（缺{" "}
+          <code className="font-mono">MINIKV_ADDR</code>
+          ）。演示可用，数据不落盘。启动{" "}
+          <code className="font-mono">minikv_server</code> 并设置{" "}
+          <code className="font-mono">MINIKV_ADDR</code> 后刷新。
+        </div>
+      )}
+
       {lastError && !connected && (
         <p className="text-xs text-amber-700">{lastError}</p>
       )}
@@ -87,22 +102,26 @@ export function LiveMetrics({ initial }: LiveMetricsProps) {
         <MetricCard
           title="QPS"
           value={metrics.qps.toFixed(1)}
-          hint="每秒查询数"
+          hint={metrics.qps_source === "prometheus_delta" ? "Δ/Δt 真实刮数" : "等待采样…"}
         />
         <MetricCard
-          title="P50 延迟"
+          title={metrics.latency_approx ? "延迟(均值)" : "P50 延迟"}
           value={`${metrics.p50_ms.toFixed(2)} ms`}
-          hint="中位数"
+          hint={metrics.latency_approx ? "近似，非真分位" : "中位数"}
         />
         <MetricCard
           title="P99 延迟"
-          value={`${metrics.p99_ms.toFixed(2)} ms`}
-          hint="尾部延迟"
+          value={metrics.p99_ms > 0 ? `${metrics.p99_ms.toFixed(2)} ms` : "—"}
+          hint={metrics.p99_ms > 0 ? "尾部延迟" : "无 histogram"}
         />
         <MetricCard
           title="存储用量"
-          value={`${metrics.storage_gb.toFixed(2)} GB`}
-          hint={`节点数 ${metrics.node_count}`}
+          value={
+            metrics.storage_known
+              ? `${metrics.storage_gb.toFixed(2)} GB`
+              : "未知"
+          }
+          hint={`节点 ${metrics.node_count} · leader ${metrics.leader_count}`}
         />
       </div>
     </div>

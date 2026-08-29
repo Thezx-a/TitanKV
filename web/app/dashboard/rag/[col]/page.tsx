@@ -6,7 +6,7 @@ import { useParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ragApi } from "@/lib/rag";
 import { api, HttpError } from "@/lib/api";
-import type { Collection } from "@/lib/types";
+import type { Collection, IngestResponse } from "@/lib/types";
 
 /**
  * 知识库详情页：文档列表 + 上传 + 删除 + 入口 chat 调试.
@@ -16,6 +16,7 @@ import type { Collection } from "@/lib/types";
  *     GET    /api/rag/collections/:col/documents
  *     POST   /api/rag/collections/:col/documents  (multipart 或 json)
  *     DELETE /api/rag/collections/:col/documents/:doc
+ *     GET    /api/rag/tasks/:task_id               (F1 异步任务状态)
  */
 export default function RagCollectionDetailPage() {
   const params = useParams<{ col: string }>();
@@ -26,6 +27,7 @@ export default function RagCollectionDetailPage() {
   const [uploadErr, setUploadErr] = useState<string | null>(null);
   const [textForm, setTextForm] = useState({ title: "", text: "" });
   const [showTextForm, setShowTextForm] = useState(false);
+  const [activeTaskID, setActiveTaskID] = useState<string | null>(null);
 
   const { data: colMeta } = useQuery<Collection>({
     queryKey: ["collection", col],
@@ -37,6 +39,22 @@ export default function RagCollectionDetailPage() {
     queryFn: () => ragApi.listDocuments(col),
     refetchInterval: 3000,
   });
+
+  const taskQ = useQuery({
+    queryKey: ["rag-task", activeTaskID],
+    queryFn: () => ragApi.getTask(activeTaskID!),
+    enabled: !!activeTaskID,
+    refetchInterval: (q) => {
+      const st = q.state.data?.status;
+      if (st === "success" || st === "failed") return false;
+      return 1500;
+    },
+  });
+
+  const onIngestQueued = (res: IngestResponse) => {
+    if (res.task_id) setActiveTaskID(res.task_id);
+    queryClient.invalidateQueries({ queryKey: ["rag-docs", col] });
+  };
 
   const uploadMutation = useMutation({
     mutationFn: async (file: File) => {
@@ -51,7 +69,7 @@ export default function RagCollectionDetailPage() {
         setUploading(false);
       }
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["rag-docs", col] }),
+    onSuccess: onIngestQueued,
     onError: (err: unknown) => {
       setUploadErr(err instanceof HttpError ? err.message : String(err));
     },
@@ -64,8 +82,8 @@ export default function RagCollectionDetailPage() {
         text: textForm.text,
         source_type: "text",
       }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["rag-docs", col] });
+    onSuccess: (res) => {
+      onIngestQueued(res);
       setTextForm({ title: "", text: "" });
       setShowTextForm(false);
     },
@@ -77,6 +95,7 @@ export default function RagCollectionDetailPage() {
   });
 
   const items = data?.items ?? [];
+  const task = taskQ.data;
 
   return (
     <div className="space-y-6">
@@ -97,6 +116,12 @@ export default function RagCollectionDetailPage() {
         </div>
         <div className="flex gap-2">
           <Link
+            href={`/dashboard/rag/${col}/wiki`}
+            className="inline-flex h-9 items-center justify-center rounded-md border px-4 text-sm font-medium hover:bg-muted"
+          >
+            TitanWiki
+          </Link>
+          <Link
             href={`/dashboard/rag/${col}/chat`}
             className="inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground shadow hover:bg-primary/90"
           >
@@ -104,6 +129,25 @@ export default function RagCollectionDetailPage() {
           </Link>
         </div>
       </div>
+
+      {task && (
+        <div
+          className={`rounded-md border px-3 py-2 text-sm ${
+            task.status === "failed"
+              ? "border-destructive/40 bg-destructive/5 text-destructive"
+              : task.status === "success"
+                ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-800"
+                : "border-amber-500/40 bg-amber-50 text-amber-900"
+          }`}
+        >
+          入库任务 <code className="font-mono text-xs">{task.task_id}</code>
+          {" · "}
+          {task.status}
+          {typeof task.progress === "number" ? ` · ${task.progress}%` : ""}
+          {task.error ? ` · ${task.error}` : ""}
+          {task.doc_id ? ` · doc=${task.doc_id}` : ""}
+        </div>
+      )}
 
       <div className="rounded-lg border bg-card p-4 shadow-sm">
         <div className="flex items-center justify-between">

@@ -14,7 +14,10 @@ add_executable(minikv_tests
     test_manifest.cpp
     test_internal_key.cpp
     test_db_reopen.cpp
+    test_delete_range.cpp
     test_compaction_tombstone.cpp
+    test_compaction_l1.cpp
+    test_compaction_retry.cpp
     test_write_stall.cpp
     test_engine_metrics.cpp
     test_compaction_stream.cpp

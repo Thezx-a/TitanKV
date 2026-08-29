@@ -13,12 +13,17 @@
 namespace minikv {
 namespace core {
 
+// E4: consecutive compaction failures → sleep ms before next poll (capped).
+// failures<=1 → 100ms; then doubles each time up to 3200ms.
+int compactionRetryBackoffMs(int consecutive_failures);
+
 class CompactionManager {
 public:
     CompactionManager(Version* version, const std::string& db_path,
                       size_t block_size = 4096, int max_level = 7,
                       size_t l0_trigger = 4, BlockCache* block_cache = nullptr,
-                      TableCache* table_cache = nullptr);
+                      TableCache* table_cache = nullptr,
+                      int fail_inject = 0);
     ~CompactionManager();
 
     void start();
@@ -26,6 +31,8 @@ public:
     void triggerCompaction();
     // Wait until not mid-merge and no pending L0/Ln file-count triggers.
     void waitIdle();
+    // Test/admin: next N merge attempts return IOError, then resume.
+    void injectFailures(int n);
 
 private:
     void compactionLoop();
@@ -49,6 +56,8 @@ private:
     std::atomic<bool> triggered_;
     std::atomic<bool> compacting_{false};
     int compaction_failures_ = 0;
+    // E4 test hook: decrement on each merge attempt while > 0.
+    std::atomic<int> fail_inject_{0};
 };
 
 }  // namespace core

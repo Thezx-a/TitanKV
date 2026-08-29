@@ -6,6 +6,8 @@
 #include <string>
 #include <unordered_map>
 
+#include "utils/metrics.h"
+
 namespace minikv {
 namespace core {
 
@@ -33,7 +35,13 @@ public:
     std::optional<std::string> get(const BlockCacheKey& key) {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = map_.find(key);
-        if (it == map_.end()) return std::nullopt;
+        if (it == map_.end()) {
+            utils::EngineMetrics::instance().block_cache_misses.fetch_add(
+                1, std::memory_order_relaxed);
+            return std::nullopt;
+        }
+        utils::EngineMetrics::instance().block_cache_hits.fetch_add(
+            1, std::memory_order_relaxed);
         list_.splice(list_.begin(), list_, it->second);
         return it->second->second.data;
     }

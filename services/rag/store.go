@@ -22,21 +22,43 @@ import (
 //	rag:cache:emb:{hash}               → 向量缓存
 //	rag:chat:{uid}:{sid}:{seq:08d}      → ChatMessage
 //	rag:qlog:{col}:{req_id}            → QueryLog
+// kvClient is the minikv-facing surface used by Store (real TCP or MemKV in tests).
+type kvClient interface {
+	Put(key, value string) error
+	Get(key string) (string, bool, error)
+	Delete(key string) error
+	DeleteRange(start, end string) error
+	Scan(start, end string) ([]data.KVPair, error)
+	WriteBatch(ops []data.BatchOp) error
+	Close() error
+}
+
 type Store struct {
-	kv *data.MiniKVClient
+	kv      kvClient
+	backend string
 }
 
 // NewStore 创建一个直连 minikv_server 的 RAG 存储.
 // addr 形如 "127.0.0.1:8888", 来自 Config.MinikvAddr.
 func NewStore(addr string) *Store {
-	return &Store{kv: data.NewMiniKVClient(addr)}
+	return &Store{kv: data.NewMiniKVClient(addr), backend: "minikv"}
+}
+
+// NewStoreFromKV wraps an arbitrary kvClient (e.g. MemKV for unit tests).
+func NewStoreFromKV(kv kvClient) *Store {
+	return &Store{kv: kv, backend: "mem"}
 }
 
 // Close 释放底层 TCP 连接.
 func (s *Store) Close() error { return s.kv.Close() }
 
 // Backend 返回存储后端标识 (用于 healthz).
-func (s *Store) Backend() string { return "minikv" }
+func (s *Store) Backend() string {
+	if s.backend != "" {
+		return s.backend
+	}
+	return "minikv"
+}
 
 // ---- 基础 KV 操作 (透传到 data.MiniKVClient) ----
 
@@ -51,6 +73,9 @@ func (s *Store) DeleteRange(start, end string) error { return s.kv.DeleteRange(s
 
 // Scan 前缀区间扫描 [start, end).
 func (s *Store) Scan(start, end string) ([]data.KVPair, error) { return s.kv.Scan(start, end) }
+
+// WriteBatch atomically applies Put/Del ops.
+func (s *Store) WriteBatch(ops []data.BatchOp) error { return s.kv.WriteBatch(ops) }
 
 // ---- JSON 读写便捷方法 ----
 
@@ -116,6 +141,13 @@ func qlogKey(col, reqID string) string {
 // 对 RAG 使用的可打印 ASCII key 是安全的 (真实 key 不会含 0xff).
 func prefixRange(p string) (string, string) {
 	return p, p + "\xff"
+}
+
+// DeletePrefix removes all keys with the given prefix via server-side DeleteRange.
+// Prefer this over Scan+WriteBatch when wiping a collection / wiki namespace.
+func (s *Store) DeletePrefix(prefix string) error {
+	start, end := prefixRange(prefix)
+	return s.DeleteRange(start, end)
 }
 
 // ---- 领域类型 ----
@@ -234,6 +266,17 @@ func (s *Store) DeleteDocument(col, docID string) error {
 	ops = append(ops, data.BatchOp{Put: false, Key: docMetaKey(col, docID)})
 	ops = append(ops, data.BatchOp{Put: false, Key: docStatusKey(col, docID)})
 	return s.kv.WriteBatch(ops)
+}
+
+// DeleteCollection removes all rag:doc / rag:chunk / rag:qlog keys for a collection.
+func (s *Store) DeleteCollection(col string) error {
+	if err := s.DeletePrefix(docPrefix(col)); err != nil {
+		return err
+	}
+	if err := s.DeletePrefix(fmt.Sprintf("rag:chunk:%s:", col)); err != nil {
+		return err
+	}
+	return s.DeletePrefix(fmt.Sprintf("rag:qlog:%s:", col))
 }
 
 // ListChunks 列出某文档的全部 chunk, 按 seq 升序 (依赖 minikv Scan 的 key 有序性).

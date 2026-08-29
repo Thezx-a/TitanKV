@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 )
 
 // RetrievalHit 检索命中的完整记录 (含从 minikv 回查的 chunk 正文).
@@ -23,25 +24,36 @@ type RetrievalHit struct {
 //
 // 热路径 (RagKv.md §8.2): 多个并发 Get 不争写锁, BloomFilter 跳过无效 SSTable.
 type Retriever struct {
-	embedder Embedder
-	index    VectorIndex
-	store    *Store
-	reranker *Reranker
-	topK     int
+	embedder      Embedder
+	index         VectorIndex
+	store         *Store
+	reranker      *Reranker
+	topK          int
+	enableRewrite bool
 }
 
 // NewRetriever 构造检索器.
 func NewRetriever(e Embedder, idx VectorIndex, s *Store, rr *Reranker, topK int) *Retriever {
+	return NewRetrieverOpts(e, idx, s, rr, topK, false)
+}
+
+// NewRetrieverOpts allows enabling query rewrite.
+func NewRetrieverOpts(e Embedder, idx VectorIndex, s *Store, rr *Reranker, topK int, enableRewrite bool) *Retriever {
 	if topK <= 0 {
 		topK = 5
 	}
-	return &Retriever{embedder: e, index: idx, store: s, reranker: rr, topK: topK}
+	return &Retriever{embedder: e, index: idx, store: s, reranker: rr, topK: topK, enableRewrite: enableRewrite}
 }
 
 // Retrieve 返回 col 内与 query 最相关的 topK 个 chunk (按 score 降序).
 func (r *Retriever) Retrieve(ctx context.Context, col, query string, topK int) ([]RetrievalHit, error) {
+	start := time.Now()
+	defer func() { RagRetrieveDuration.Observe(time.Since(start).Seconds()) }()
 	if topK <= 0 {
 		topK = r.topK
+	}
+	if r.enableRewrite {
+		query = RewriteQuery(query)
 	}
 	vec, err := r.embedder.Embed(ctx, query)
 	if err != nil {

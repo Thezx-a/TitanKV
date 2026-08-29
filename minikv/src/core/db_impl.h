@@ -33,6 +33,7 @@ public:
     Status get(const ReadOptions& opts, const Slice& key, std::string* value) override;
     Status del(const WriteOptions& opts, const Slice& key) override;
     Status write(const WriteOptions& opts, const WriteBatch& batch) override;
+    Status deleteRange(const WriteOptions& opts, const Slice& start, const Slice& end) override;
     std::unique_ptr<Iterator> newIterator(const ReadOptions& opts) override;
     void compact() override;
     void waitFlush() override;

@@ -29,6 +29,10 @@ struct Options {
     // always decompress correctly regardless of this option at read time.
     //   0 = none, 1 = snappy, 2 = zstd
     uint8_t compression = 1;  // default: snappy
+
+    // E4 test hook: first N CompactionManager merges return IOError (then real).
+    // Production must leave at 0.
+    int compaction_fail_inject = 0;
 };
 
 struct ReadOptions {};

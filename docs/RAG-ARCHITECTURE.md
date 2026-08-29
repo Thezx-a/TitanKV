@@ -3,7 +3,7 @@
 > 版本：v1.1
 > 状态：已落地（随 `make run-all` 启动，默认 :8085）
 > 关联方案：[`RagKv.md`](../RagKv.md) (v2.0)
-> 仓库根：`SpectrumCore` / TitanKV
+> 仓库根：`TitanKV`（历史名 SpectrumCore 已废弃）
 > 编译验证：`go build ./services/... ./gateway/...` 通过；`tsc --noEmit` 通过
 
 本文档面向"已读 RagKv.md 但想看实际落地版"的读者，包含：架构层级图、各层职责、关键代码定位、数据流、KV Key 设计、接口契约、权限模型、启动流程、面试口述要点。

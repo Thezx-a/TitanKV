@@ -147,7 +147,7 @@ Once WSL2 is installed, we want to open the project directory inside WSL2 direct
 
 ```bash
 # Run in the WSL2 terminal
-cd /mnt/d/SpectrumCore
+cd /mnt/d/WSL/TitanKV
 code .
 ```
 
@@ -161,7 +161,7 @@ The one caveat is filesystem performance: **project source is best placed in WSL
 
 ```bash
 # In WSL2, symlink the Windows project directory to home
-ln -s /mnt/d/SpectrumCore ~/titan-kv
+ln -s /mnt/d/WSL/TitanKV ~/titan-kv
 cd ~/titan-kv
 ```
 

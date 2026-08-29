@@ -40,28 +40,56 @@ type Config struct {
 	ChatModel    string // RAG_CHAT_MODEL
 	ChatBaseURL  string // RAG_CHAT_BASE_URL
 	ChatAPIKey   string // RAG_CHAT_API_KEY
+
+	// Industrial / W0
+	AsyncIngest        bool   // RAG_ASYNC_INGEST, 默认 true
+	IngestWorkers      int    // RAG_INGEST_WORKERS, 默认 4
+	IngestQueueSize    int    // RAG_INGEST_QUEUE_SIZE, 默认 256
+	PDFCommand         string // RAG_PDF_COMMAND, 默认 pdftotext
+	EnableQueryRewrite bool   // RAG_ENABLE_QUERY_REWRITE, 默认 false
+	HistoryTurns       int    // RAG_HISTORY_TURNS, 默认 3
+	CacheTTLHours      int    // RAG_CACHE_TTL_HOURS, 默认 72
+
+	// TitanWiki / W1
+	EnableWiki     bool // RAG_ENABLE_WIKI, 默认 true
+	WikiLLM        bool // RAG_WIKI_LLM, 默认 false（演示用规则 summary；开则走 ChatProvider）
+	WikiWorkers    int  // RAG_WIKI_WORKERS, 默认 2
+	WikiQueueSize  int  // RAG_WIKI_QUEUE_SIZE, 默认 64
+	AutoCompile    bool // RAG_WIKI_AUTO_COMPILE, 默认 true（ingest success 后自动 enqueue）
 }
 
 // LoadConfig 从环境变量加载配置, 缺省值保证空环境也能启动 (MVP 可运行).
 func LoadConfig() Config {
 	return Config{
-		Addr:              getenv("RAG_ADDR", getenv("RAG_SERVICE_PORT", ":8085")),
-		MinikvAddr:        getenv("MINIKV_ADDR", "127.0.0.1:8888"),
-		IndexDir:          getenv("RAG_INDEX_DIR", "./rag_index"),
-		MaxDocSizeMB:      getenvInt("RAG_MAX_DOC_SIZE_MB", 20),
-		DefaultTopK:       getenvInt("RAG_DEFAULT_TOPK", 5),
-		EnableRerank:      getenvBool("RAG_ENABLE_RERANK", false),
-		IndexType:         strings.ToLower(getenv("RAG_INDEX_TYPE", "hnsw")),
-		EmbeddingProvider: strings.ToLower(getenv("RAG_EMBEDDING_PROVIDER", "local")),
-		EmbeddingModel:    getenv("RAG_EMBEDDING_MODEL", "text-embedding-3-small"),
-		EmbeddingDim:      getenvInt("RAG_EMBEDDING_DIM", 384),
-		EmbeddingBaseURL:  getenv("RAG_EMBEDDING_BASE_URL", "https://api.openai.com/v1"),
-		EmbeddingAPIKey:   getenv("RAG_EMBEDDING_API_KEY", ""),
-		EmbeddingBatch:    getenvInt("RAG_EMBEDDING_BATCH_SIZE", 32),
-		ChatProvider:      strings.ToLower(getenv("RAG_CHAT_PROVIDER", "local")),
-		ChatModel:         getenv("RAG_CHAT_MODEL", "gpt-4o-mini"),
-		ChatBaseURL:       getenv("RAG_CHAT_BASE_URL", "https://api.openai.com/v1"),
-		ChatAPIKey:        getenv("RAG_CHAT_API_KEY", ""),
+		Addr:               getenv("RAG_ADDR", getenv("RAG_SERVICE_PORT", ":8085")),
+		MinikvAddr:         getenv("MINIKV_ADDR", "127.0.0.1:8888"),
+		IndexDir:           getenv("RAG_INDEX_DIR", "./rag_index"),
+		MaxDocSizeMB:       getenvInt("RAG_MAX_DOC_SIZE_MB", 20),
+		DefaultTopK:        getenvInt("RAG_DEFAULT_TOPK", 5),
+		EnableRerank:       getenvBool("RAG_ENABLE_RERANK", false),
+		IndexType:          strings.ToLower(getenv("RAG_INDEX_TYPE", "hnsw")),
+		EmbeddingProvider:  strings.ToLower(getenv("RAG_EMBEDDING_PROVIDER", "local")),
+		EmbeddingModel:     getenv("RAG_EMBEDDING_MODEL", "text-embedding-3-small"),
+		EmbeddingDim:       getenvInt("RAG_EMBEDDING_DIM", 384),
+		EmbeddingBaseURL:   getenv("RAG_EMBEDDING_BASE_URL", "https://api.openai.com/v1"),
+		EmbeddingAPIKey:    getenv("RAG_EMBEDDING_API_KEY", ""),
+		EmbeddingBatch:     getenvInt("RAG_EMBEDDING_BATCH_SIZE", 32),
+		ChatProvider:       strings.ToLower(getenv("RAG_CHAT_PROVIDER", "local")),
+		ChatModel:          getenv("RAG_CHAT_MODEL", "gpt-4o-mini"),
+		ChatBaseURL:        getenv("RAG_CHAT_BASE_URL", "https://api.openai.com/v1"),
+		ChatAPIKey:         getenv("RAG_CHAT_API_KEY", ""),
+		AsyncIngest:        getenvBool("RAG_ASYNC_INGEST", true),
+		IngestWorkers:      getenvInt("RAG_INGEST_WORKERS", 4),
+		IngestQueueSize:    getenvInt("RAG_INGEST_QUEUE_SIZE", 256),
+		PDFCommand:         getenv("RAG_PDF_COMMAND", "pdftotext"),
+		EnableQueryRewrite: getenvBool("RAG_ENABLE_QUERY_REWRITE", false),
+		HistoryTurns:       getenvInt("RAG_HISTORY_TURNS", 3),
+		CacheTTLHours:      getenvInt("RAG_CACHE_TTL_HOURS", 72),
+		EnableWiki:         getenvBool("RAG_ENABLE_WIKI", true),
+		WikiLLM:            getenvBool("RAG_WIKI_LLM", false),
+		WikiWorkers:        getenvInt("RAG_WIKI_WORKERS", 2),
+		WikiQueueSize:      getenvInt("RAG_WIKI_QUEUE_SIZE", 64),
+		AutoCompile:        getenvBool("RAG_WIKI_AUTO_COMPILE", true),
 	}
 }
 

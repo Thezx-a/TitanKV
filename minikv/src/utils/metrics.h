@@ -15,9 +15,14 @@ struct EngineMetrics {
     std::atomic<uint64_t> deletes{0};
     std::atomic<uint64_t> flushes{0};
     std::atomic<uint64_t> compactions{0};
+    // E4: background compaction merge attempts that returned !ok (then retried).
+    std::atomic<uint64_t> compaction_failures{0};
     std::atomic<uint64_t> write_stalls{0};
     std::atomic<uint64_t> table_cache_hits{0};
     std::atomic<uint64_t> table_cache_misses{0};
+    // E3: decompressed SST block LRU (BlockCache), distinct from TableCache (open Reader).
+    std::atomic<uint64_t> block_cache_hits{0};
+    std::atomic<uint64_t> block_cache_misses{0};
 
     static EngineMetrics& instance() {
         static EngineMetrics m;

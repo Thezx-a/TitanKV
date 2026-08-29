@@ -66,7 +66,8 @@ Status DBImpl::open(const Options& options, std::unique_ptr<DB>* dbptr) {
     impl->compaction_mgr_ = std::make_unique<CompactionManager>(
         &impl->version_, impl->db_path_, impl->options_.block_size,
         impl->options_.max_level, impl->options_.level0_compaction_trigger,
-        impl->block_cache_.get(), impl->table_cache_.get());
+        impl->block_cache_.get(), impl->table_cache_.get(),
+        impl->options_.compaction_fail_inject);
     impl->compaction_mgr_->start();
     *dbptr = std::move(impl);
     return Status::Ok();
@@ -293,6 +294,65 @@ Status DBImpl::del(const WriteOptions& opts, const Slice& key) {
     WriteBatch batch;
     batch.del(key);
     return write(opts, batch);
+}
+
+// E5 / T2.8: delete user keys in [start, end) by emitting point tombstones.
+// Batches at most 10000 ops per WriteBatch so large wiki/rag prefixes stay memory-bounded.
+// Best-effort under concurrent writers (iterator is a snapshot at start).
+Status DBImpl::deleteRange(const WriteOptions& opts, const Slice& start, const Slice& end) {
+    static constexpr size_t kBatchLimit = 10000;
+
+    ReadOptions ro;
+    auto it = newIterator(ro);
+    const std::string start_s = start.toString();
+    const std::string end_s = end.toString();
+
+    if (!start_s.empty()) {
+        std::string seek_key =
+            InternalKeyEncode(Slice(start_s), kMaxSequenceNumber, ValueType::kValue);
+        it->seek(Slice(seek_key));
+    } else {
+        it->seekToFirst();
+    }
+
+    WriteBatch batch;
+    std::string last_user;
+    auto flushBatch = [&]() -> Status {
+        if (batch.count() == 0) return Status::Ok();
+        Status s = write(opts, batch);
+        batch.clear();
+        return s;
+    };
+
+    while (it->valid()) {
+        Slice ik = it->key();
+        if (ik.size() < kTrailerBytes) {
+            it->next();
+            continue;
+        }
+        Slice uk = InternalKeyUserKey(ik);
+        std::string uks = uk.toString();
+        if (!start_s.empty() && uks < start_s) {
+            it->next();
+            continue;
+        }
+        if (!end_s.empty() && uks >= end_s) {
+            break;
+        }
+        if (uks != last_user) {
+            last_user = uks;
+            batch.del(Slice(uks));
+            if (batch.count() >= kBatchLimit) {
+                Status s = flushBatch();
+                if (!s.ok()) return s;
+            }
+        }
+        it->next();
+    }
+    if (!it->status().ok()) {
+        return it->status();
+    }
+    return flushBatch();
 }
 
 // ---------------------------------------------------------------------------

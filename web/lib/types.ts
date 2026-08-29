@@ -3,20 +3,27 @@
 
 /** 实时指标快照（对应 SSE /api/metrics/stream 推送与 /api/observability/metrics 首屏） */
 export interface Metrics {
-  /** 当前 QPS（每秒请求数） */
+  /** 当前 QPS（Prometheus counter Δ/Δt；首帧常为 0） */
   qps: number;
-  /** P50 延迟，单位毫秒 */
+  /** 延迟近似（有 sum/count 时为平均值 ms；非真 P50） */
   p50_ms: number;
-  /** P99 延迟，单位毫秒 */
+  /** 真 P99；无 histogram quantile 时为 0 */
   p99_ms: number;
-  /** 已用存储空间，单位 GB */
+  /** 已用存储；未知时为 0 且 storage_known=false */
   storage_gb: number;
-  /** 集群节点数 */
+  storage_known?: boolean;
+  /** 单进程演示拓扑下为 1 */
   node_count: number;
-  /** Raft Leader 数 */
+  /** Raft 教学路径外为 0 */
   leader_count: number;
   /** 采样时间戳（Unix 秒） */
   timestamp: number;
+  /** prometheus_delta | none */
+  qps_source?: string;
+  /** true：延迟来自 avg，非分位数 */
+  latency_approx?: boolean;
+  /** minikv | memory | unknown — memory 时仪表盘黄条 */
+  data_backend?: string;
 }
 
 /** 用户 */
@@ -127,6 +134,62 @@ export interface IngestResponse {
   task_id: string;
   doc_id: string;
   estimated_chunks: number;
+}
+
+/** TitanWiki 页 frontmatter */
+export interface WikiFrontmatter {
+  title: string;
+  slug: string;
+  type: string;
+  tags?: string[];
+  sources: string[];
+  confidence?: string;
+  contested?: boolean;
+  updated_at?: number;
+  compile_version?: number;
+}
+
+export interface WikiPage {
+  frontmatter: WikiFrontmatter;
+  body: string;
+  summary: string;
+}
+
+export interface WikiEdge {
+  from: string;
+  to: string;
+  rel: string;
+}
+
+export interface WikiIndexEntry {
+  slug: string;
+  title: string;
+  type: string;
+  summary: string;
+}
+
+export interface WikiIndexDoc {
+  col: string;
+  updated_at: number;
+  entries: WikiIndexEntry[];
+}
+
+export interface WikiGraphView {
+  slug: string;
+  depth: number;
+  out: WikiEdge[];
+  in: WikiEdge[];
+  neighbors?: Record<string, WikiEdge[]>;
+}
+
+export interface CompileTask {
+  task_id: string;
+  col: string;
+  doc_id: string;
+  status: "pending" | "running" | "success" | "failed";
+  pages?: number;
+  edges?: number;
+  error?: string;
 }
 
 /** 检索命中 */
