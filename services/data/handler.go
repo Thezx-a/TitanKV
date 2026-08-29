@@ -111,10 +111,17 @@ func (s *Service) Scan(c *gin.Context) {
 // RegisterRoutes registers HTTP routes.
 func (s *Service) RegisterRoutes(r *gin.Engine) {
 	r.GET("/healthz", func(c *gin.Context) {
+		status := "ok"
+		kv := "ok"
+		if _, _, err := s.store.Get("__titankv_health_probe__"); err != nil {
+			status = "degraded"
+			kv = "down"
+		}
 		c.JSON(http.StatusOK, gin.H{
-			"status":  "ok",
+			"status":  status,
 			"service": "data",
 			"backend": s.store.Backend(),
+			"kv":      kv,
 			"keys":    s.store.Size(),
 		})
 	})
