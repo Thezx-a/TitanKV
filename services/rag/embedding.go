@@ -212,15 +212,27 @@ func (e *openAIEmbedder) EmbedTexts(ctx context.Context, texts []string) ([][]fl
 
 // ---- 缓存装饰器: query 向量缓存到 minikv, 命中跳过远端 ----
 
+// embCacheEntry stores vector + creation time for TTL expiry.
+type embCacheEntry struct {
+	Vec       []float32 `json:"vec"`
+	CreatedAt int64     `json:"created_at"`
+}
+
 type cachedEmbedder struct {
 	inner Embedder
 	store *Store
+	ttl   time.Duration // 0 = never expire on read
 	mu    sync.Mutex
 }
 
-// NewCachedEmbedder 用 minikv 缓存 embedding 结果 (rag:cache:emb:{sha256}).
+// NewCachedEmbedder 用 minikv 缓存 embedding 结果 (rag:cache:emb:{sha256}), 无 TTL.
 func NewCachedEmbedder(inner Embedder, store *Store) Embedder {
-	return &cachedEmbedder{inner: inner, store: store}
+	return NewCachedEmbedderTTL(inner, store, 0)
+}
+
+// NewCachedEmbedderTTL caches embeddings with optional TTL (lazy expiry on read).
+func NewCachedEmbedderTTL(inner Embedder, store *Store, ttl time.Duration) Embedder {
+	return &cachedEmbedder{inner: inner, store: store, ttl: ttl}
 }
 
 func (c *cachedEmbedder) Dim() int { return c.inner.Dim() }
@@ -229,18 +241,72 @@ func (c *cachedEmbedder) Embed(ctx context.Context, text string) ([]float32, err
 	h := sha256.Sum256([]byte(text))
 	key := embCacheKey(hex.EncodeToString(h[:]))
 	if raw, ok, err := c.store.Get(key); err == nil && ok {
-		var vec []float32
-		if json.Unmarshal([]byte(raw), &vec) == nil {
+		if vec, hit := decodeEmbCache(raw, c.ttl); hit {
 			return vec, nil
 		}
+		// expired or corrupt → delete and recompute
+		_ = c.store.Delete(key)
 	}
 	vec, err := c.inner.Embed(ctx, text)
 	if err != nil {
 		return nil, err
 	}
-	// 缓存写失败不影响主流程
-	if buf, e := json.Marshal(vec); e == nil {
+	entry := embCacheEntry{Vec: vec, CreatedAt: time.Now().Unix()}
+	if buf, e := json.Marshal(entry); e == nil {
 		_ = c.store.Put(key, string(buf))
 	}
 	return vec, nil
+}
+
+func decodeEmbCache(raw string, ttl time.Duration) ([]float32, bool) {
+	var entry embCacheEntry
+	if json.Unmarshal([]byte(raw), &entry) == nil && len(entry.Vec) > 0 {
+		if ttl > 0 && entry.CreatedAt > 0 {
+			if time.Since(time.Unix(entry.CreatedAt, 0)) > ttl {
+				return nil, false
+			}
+		}
+		return entry.Vec, true
+	}
+	// legacy: bare []float32 without created_at
+	var vec []float32
+	if json.Unmarshal([]byte(raw), &vec) == nil && len(vec) > 0 {
+		// treat legacy as expired when TTL is set (force refresh once)
+		if ttl > 0 {
+			return nil, false
+		}
+		return vec, true
+	}
+	return nil, false
+}
+
+// PurgeExpiredEmbCache deletes rag:cache:emb:* entries older than ttl.
+// Returns number of keys removed.
+func PurgeExpiredEmbCache(store *Store, ttl time.Duration) (int, error) {
+	if store == nil || ttl <= 0 {
+		return 0, nil
+	}
+	start, end := prefixRange("rag:cache:emb:")
+	pairs, err := store.Scan(start, end)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	now := time.Now()
+	for _, p := range pairs {
+		var entry embCacheEntry
+		expired := false
+		if json.Unmarshal([]byte(p.Value), &entry) == nil && entry.CreatedAt > 0 {
+			expired = now.Sub(time.Unix(entry.CreatedAt, 0)) > ttl
+		} else {
+			// legacy bare vectors: purge when TTL enabled
+			expired = true
+		}
+		if expired {
+			if err := store.Delete(p.Key); err == nil {
+				n++
+			}
+		}
+	}
+	return n, nil
 }

@@ -25,6 +25,7 @@ type Config struct {
 	MaxDocSizeMB int    // RAG_MAX_DOC_SIZE_MB, 默认 20
 	DefaultTopK  int    // RAG_DEFAULT_TOPK, 默认 5
 	EnableRerank bool   // RAG_ENABLE_RERANK, 默认 false
+	RerankURL    string // RAG_RERANK_URL, optional HTTP sidecar
 	IndexType    string // RAG_INDEX_TYPE: brute|hnsw, 默认 hnsw
 
 	// Embedding provider
@@ -47,8 +48,15 @@ type Config struct {
 	IngestQueueSize    int    // RAG_INGEST_QUEUE_SIZE, 默认 256
 	PDFCommand         string // RAG_PDF_COMMAND, 默认 pdftotext
 	EnableQueryRewrite bool   // RAG_ENABLE_QUERY_REWRITE, 默认 false
+	EnableHyde         bool   // RAG_ENABLE_HYDE, 默认 false
+	EnableMultiQuery   bool   // RAG_ENABLE_MULTI_QUERY, 默认 false
+	MultiQueryN        int    // RAG_MULTI_QUERY_N, 默认 3
 	HistoryTurns       int    // RAG_HISTORY_TURNS, 默认 3
 	CacheTTLHours      int    // RAG_CACHE_TTL_HOURS, 默认 72
+	HNSWEfConstruction int    // RAG_HNSW_EF_CONSTRUCTION, 默认 200
+	HNSWEfSearch       int    // RAG_HNSW_EF_SEARCH, 默认 100
+	Tokenizer          string // RAG_TOKENIZER: heuristic|tiktoken, 默认 heuristic
+	TokenizerEncoding  string // RAG_TOKENIZER_ENCODING, 默认 cl100k_base
 
 	// TitanWiki / W1
 	EnableWiki     bool // RAG_ENABLE_WIKI, 默认 true
@@ -67,6 +75,7 @@ func LoadConfig() Config {
 		MaxDocSizeMB:       getenvInt("RAG_MAX_DOC_SIZE_MB", 20),
 		DefaultTopK:        getenvInt("RAG_DEFAULT_TOPK", 5),
 		EnableRerank:       getenvBool("RAG_ENABLE_RERANK", false),
+		RerankURL:          getenv("RAG_RERANK_URL", ""),
 		IndexType:          strings.ToLower(getenv("RAG_INDEX_TYPE", "hnsw")),
 		EmbeddingProvider:  strings.ToLower(getenv("RAG_EMBEDDING_PROVIDER", "local")),
 		EmbeddingModel:     getenv("RAG_EMBEDDING_MODEL", "text-embedding-3-small"),
@@ -83,8 +92,15 @@ func LoadConfig() Config {
 		IngestQueueSize:    getenvInt("RAG_INGEST_QUEUE_SIZE", 256),
 		PDFCommand:         getenv("RAG_PDF_COMMAND", "pdftotext"),
 		EnableQueryRewrite: getenvBool("RAG_ENABLE_QUERY_REWRITE", false),
+		EnableHyde:         getenvBool("RAG_ENABLE_HYDE", false),
+		EnableMultiQuery:   getenvBool("RAG_ENABLE_MULTI_QUERY", false),
+		MultiQueryN:        getenvInt("RAG_MULTI_QUERY_N", 3),
 		HistoryTurns:       getenvInt("RAG_HISTORY_TURNS", 3),
 		CacheTTLHours:      getenvInt("RAG_CACHE_TTL_HOURS", 72),
+		HNSWEfConstruction: getenvInt("RAG_HNSW_EF_CONSTRUCTION", 200),
+		HNSWEfSearch:       getenvInt("RAG_HNSW_EF_SEARCH", 100),
+		Tokenizer:          strings.ToLower(getenv("RAG_TOKENIZER", "heuristic")),
+		TokenizerEncoding:  getenv("RAG_TOKENIZER_ENCODING", "cl100k_base"),
 		EnableWiki:         getenvBool("RAG_ENABLE_WIKI", true),
 		WikiLLM:            getenvBool("RAG_WIKI_LLM", false),
 		WikiWorkers:        getenvInt("RAG_WIKI_WORKERS", 2),

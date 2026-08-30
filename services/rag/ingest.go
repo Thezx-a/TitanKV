@@ -60,10 +60,10 @@ func (g *Ingester) runIngest(ctx context.Context, task *IngestTask, title, sourc
 	col, docID := task.Col, task.DocID
 	now := time.Now().Unix()
 
-	// 1) 去重
+	// 1) 去重 (content_hash 相同且 chunker_version 一致才跳过)
 	h := sha256.Sum256([]byte(text))
 	contentHash := hex.EncodeToString(h[:])
-	if existing := g.findByHash(col, contentHash); existing != nil {
+	if existing := g.findByHash(col, contentHash); existing != nil && existing.ChunkerVersion == ActiveChunkerVersion(CurrentTokenizerMode()) {
 		task.Status = TaskSuccess
 		task.Progress = 100
 		task.DocID = existing.DocID
@@ -75,8 +75,11 @@ func (g *Ingester) runIngest(ctx context.Context, task *IngestTask, title, sourc
 	task.Status = TaskRunning
 	_ = g.store.SaveTask(task)
 
-	// 2) 切块
-	chunks := g.chunker.Split(text)
+	// 2) 切块 (按 source 路由; 保留构造时 Size/Overlap)
+	chunker := ChunkerFor(source, detectDocTypeFromText(source, text))
+	chunker.Size = g.chunker.Size
+	chunker.Overlap = g.chunker.Overlap
+	chunks := chunker.Split(text)
 	if len(chunks) == 0 {
 		RagIngestTotal.WithLabelValues("failed").Inc()
 		return g.failTask(task, "empty document after chunking")
@@ -113,7 +116,8 @@ func (g *Ingester) runIngest(ctx context.Context, task *IngestTask, title, sourc
 	// 4) 持久化 WriteBatch
 	meta := &DocumentMeta{
 		DocID: docID, Col: col, Title: title, Source: source,
-		ContentHash: contentHash, ChunkCount: len(records), CreatedAt: now,
+		ContentHash: contentHash, ChunkerVersion: ActiveChunkerVersion(CurrentTokenizerMode()),
+		ChunkCount: len(records), CreatedAt: now,
 	}
 	if err := g.store.SaveDocument(meta, records, TaskRunning); err != nil {
 		RagIngestTotal.WithLabelValues("failed").Inc()

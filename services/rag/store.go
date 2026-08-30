@@ -154,13 +154,14 @@ func (s *Store) DeletePrefix(prefix string) error {
 
 // DocumentMeta 文档元数据.
 type DocumentMeta struct {
-	DocID       string `json:"doc_id"`
-	Col         string `json:"col"`
-	Title       string `json:"title"`
-	Source      string `json:"source"`        // 文件名或 "inline"
-	ContentHash string `json:"content_hash"`  // sha256, 去重依据
-	ChunkCount  int    `json:"chunk_count"`
-	CreatedAt   int64  `json:"created_at"`
+	DocID          string `json:"doc_id"`
+	Col            string `json:"col"`
+	Title          string `json:"title"`
+	Source         string `json:"source"`          // 文件名或 "inline"
+	ContentHash    string `json:"content_hash"`    // sha256, 去重依据
+	ChunkerVersion string `json:"chunker_version"` // 切分器版本; 不一致则强制重切
+	ChunkCount     int    `json:"chunk_count"`
+	CreatedAt      int64  `json:"created_at"`
 }
 
 // ChunkRecord 单个文本块. Text 进 minikv, Embedding 只在内存 (SideIndex).

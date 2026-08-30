@@ -1,9 +1,7 @@
 package rag
 
 import (
-	"encoding/json"
 	"math"
-	"os"
 	"strings"
 	"sync"
 )
@@ -38,13 +36,12 @@ func (idx *SideIndex) Size() int {
 	return len(idx.vectors)
 }
 
-// Add 插入/更新一个 chunk 的向量.
+// Add 插入/更新一个 chunk 的向量 (预 L2 归一化, TopK 只需点积).
 func (idx *SideIndex) Add(chunkID string, vec []float32) {
 	if len(vec) != idx.dim {
 		return
 	}
-	cp := make([]float32, len(vec))
-	copy(cp, vec)
+	cp := l2Normalize(vec)
 	idx.mu.Lock()
 	idx.vectors[chunkID] = cp
 	idx.mu.Unlock()
@@ -78,11 +75,12 @@ type Hit struct {
 }
 
 // TopK 返回与 query 最相似的 k 个 chunk_id (余弦相似度, 降序).
-// MVP 暴力扫描 O(N*dim), N<10w 可接受; 后续可换 HNSW (接口不变).
+// 向量入库已预归一化, 此处对 query 归一化后走点积.
 func (idx *SideIndex) TopK(query []float32, k int) []Hit {
 	if k <= 0 {
 		k = 5
 	}
+	q := l2Normalize(query)
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
@@ -92,7 +90,7 @@ func (idx *SideIndex) TopK(query []float32, k int) []Hit {
 	}
 	cands := make([]cand, 0, len(idx.vectors))
 	for id, vec := range idx.vectors {
-		cands = append(cands, cand{id, cosine(query, vec)})
+		cands = append(cands, cand{id, dotProduct(q, vec)})
 	}
 	if k > len(cands) {
 		k = len(cands)
@@ -114,8 +112,25 @@ func (idx *SideIndex) TopK(query []float32, k int) []Hit {
 	return out
 }
 
-// cosine 余弦相似度. 输入未必归一化, 这里兜底归一化.
-func cosine(a, b []float32) float32 {
+// l2Normalize returns a copy scaled to unit L2 norm (zero vector → copy as-is).
+func l2Normalize(v []float32) []float32 {
+	cp := make([]float32, len(v))
+	copy(cp, v)
+	var n float64
+	for _, x := range cp {
+		n += float64(x) * float64(x)
+	}
+	if n <= 0 {
+		return cp
+	}
+	inv := float32(1.0 / math.Sqrt(n))
+	for i := range cp {
+		cp[i] *= inv
+	}
+	return cp
+}
+
+func dotProduct(a, b []float32) float32 {
 	if len(a) != len(b) {
 		return 0
 	}
@@ -123,15 +138,15 @@ func cosine(a, b []float32) float32 {
 	for i := range a {
 		dot += a[i] * b[i]
 	}
-	var na, nb float32
-	for i := range a {
-		na += a[i] * a[i]
-		nb += b[i] * b[i]
+	return dot
+}
+
+// cosine 余弦相似度. 输入未必归一化, 这里兜底归一化.
+func cosine(a, b []float32) float32 {
+	if len(a) != len(b) {
+		return 0
 	}
-	if na > 0 && nb > 0 {
-		return dot / float32(math.Sqrt(float64(na*nb)))
-	}
-	return 0
+	return dotProduct(l2Normalize(a), l2Normalize(b))
 }
 
 // ---- 快照持久化 ----
@@ -141,16 +156,11 @@ type snapshotFile struct {
 	Vectors map[string][]float32 `json:"vectors"`
 }
 
-// SaveSnapshot 把全量索引序列化到 path.
+// SaveSnapshot 把全量索引序列化到 path (TKVX 二进制).
 func (idx *SideIndex) SaveSnapshot(path string) error {
 	idx.mu.RLock()
-	sf := snapshotFile{Dim: idx.dim, Vectors: idx.vectors}
-	data, err := json.Marshal(sf)
-	idx.mu.RUnlock()
-	if err != nil {
-		return err
-	}
-	return atomicWriteFile(path, data)
+	defer idx.mu.RUnlock()
+	return WriteTKVXSnapshot(path, "", idx.dim, idx.metric, idx.vectors)
 }
 
 // SaveSnapshotPrefix 只保存 chunk_id 以 prefix 开头的向量 (按 collection 分片快照).
@@ -163,48 +173,43 @@ func (idx *SideIndex) SaveSnapshotPrefix(path, prefix string) error {
 		}
 	}
 	dim := idx.dim
+	metric := idx.metric
 	idx.mu.RUnlock()
-	return atomicWriteJSON(path, snapshotFile{Dim: dim, Vectors: sub})
+	col := strings.TrimSuffix(prefix, "/")
+	return WriteTKVXSnapshot(path, col, dim, metric, sub)
 }
 
-// LoadSnapshot 从 path 覆盖加载.
+// LoadSnapshot 从 path 覆盖加载 (TKVX 优先, JSON 兼容).
 func (idx *SideIndex) LoadSnapshot(path string) error {
-	f, err := os.Open(path)
+	vecs, dim, err := loadSnapshotVectors(path)
 	if err != nil {
-		return err
-	}
-	defer f.Close()
-	var sf snapshotFile
-	if err := json.NewDecoder(f).Decode(&sf); err != nil {
 		return err
 	}
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	idx.dim = sf.Dim
-	idx.vectors = sf.Vectors
-	if idx.vectors == nil {
-		idx.vectors = make(map[string][]float32)
+	if dim > 0 {
+		idx.dim = dim
+	}
+	idx.vectors = make(map[string][]float32, len(vecs))
+	for k, v := range vecs {
+		idx.vectors[k] = l2Normalize(v)
 	}
 	return nil
 }
 
 // MergeSnapshot 从 path 合并加载到现有索引 (不覆盖, 启动时逐个 col 合并).
 func (idx *SideIndex) MergeSnapshot(path string) error {
-	f, err := os.Open(path)
+	vecs, dim, err := loadSnapshotVectors(path)
 	if err != nil {
-		return err
-	}
-	defer f.Close()
-	var sf snapshotFile
-	if err := json.NewDecoder(f).Decode(&sf); err != nil {
 		return err
 	}
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	for k, v := range sf.Vectors {
-		cp := make([]float32, len(v))
-		copy(cp, v)
-		idx.vectors[k] = cp
+	if dim > 0 && idx.dim == 0 {
+		idx.dim = dim
+	}
+	for k, v := range vecs {
+		idx.vectors[k] = l2Normalize(v)
 	}
 	return nil
 }

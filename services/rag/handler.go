@@ -31,6 +31,10 @@ type Service struct {
 
 // NewService 构造 Service (由 cmd/main.go 调用).
 func NewService(cfg Config) (*Service, error) {
+	if err := InitTokenizerFromConfig(cfg.Tokenizer, cfg.TokenizerEncoding); err != nil {
+		// fall back to heuristic so empty/offline env still boots
+		_ = InitTokenizerFromConfig("heuristic", "")
+	}
 	store := NewStore(cfg.MinikvAddr)
 
 	// embedder: local (hash) | openai
@@ -41,16 +45,21 @@ func NewService(cfg Config) (*Service, error) {
 	default:
 		emb = NewHashEmbedder(cfg.EmbeddingDim)
 	}
-	emb = NewCachedEmbedder(emb, store)
+	ttl := time.Duration(cfg.CacheTTLHours) * time.Hour
+	emb = NewCachedEmbedderTTL(emb, store, ttl)
+	if ttl > 0 {
+		_, _ = PurgeExpiredEmbCache(store, ttl)
+	}
 
-	idx := NewVectorIndex(emb.Dim(), cfg.IndexType)
+	idx := NewVectorIndexWithParams(emb.Dim(), cfg.IndexType, HNSWParams{
+		EfConstruction: cfg.HNSWEfConstruction, EfSearch: cfg.HNSWEfSearch,
+	})
 	loadAllSnapshots(cfg.IndexDir, idx)
 	maybeRebuildIfEmpty(context.Background(), store, emb, idx)
 	RagIndexSize.Set(float64(idx.Size()))
 
 	chunker := NewChunker(512, 64)
 	ing := NewIngester(store, chunker, emb, idx, cfg)
-	ret := NewRetrieverOpts(emb, idx, store, NewReranker(cfg.EnableRerank), cfg.DefaultTopK, cfg.EnableQueryRewrite)
 
 	var cp ChatProvider
 	switch cfg.ChatProvider {
@@ -59,6 +68,15 @@ func NewService(cfg Config) (*Service, error) {
 	default:
 		cp = NewMockChatProvider()
 	}
+	rr := NewReranker(cfg.EnableRerank)
+	if cfg.EnableRerank && cfg.RerankURL != "" {
+		rr = NewHTTPReranker(cfg.RerankURL, true)
+	}
+	ret := NewRetrieverWithConfig(emb, idx, store, rr, RetrieverConfig{
+		TopK: cfg.DefaultTopK, EnableRewrite: cfg.EnableQueryRewrite,
+		EnableHyde: cfg.EnableHyde, EnableMultiQuery: cfg.EnableMultiQuery,
+		MultiQueryN: cfg.MultiQueryN, Chat: cp,
+	})
 	chatOrch := NewChatOrchestratorWithHistory(ret, cp, store, cfg.DefaultTopK, cfg.HistoryTurns)
 
 	svc := &Service{
@@ -115,6 +133,7 @@ func (s *Service) Close() error {
 //
 //	GET    /healthz
 //	POST   /api/rag/collections/:col/documents   入库 (multipart file | json text)
+//	POST   /api/rag/collections/:col/documents/batch  批量入库
 //	GET    /api/rag/collections/:col/documents   列表
 //	GET    /api/rag/collections/:col/documents/:doc  详情 (含 chunks)
 //	DELETE /api/rag/collections/:col/documents/:doc  删除
@@ -141,6 +160,8 @@ func (s *Service) RegisterRoutes(r *gin.Engine) {
 			"index_dir":     s.cfg.IndexDir,
 			"async_ingest":  s.cfg.AsyncIngest,
 			"query_rewrite": s.cfg.EnableQueryRewrite,
+			"hyde":          s.cfg.EnableHyde,
+			"multi_query":   s.cfg.EnableMultiQuery,
 			"history_turns": s.cfg.HistoryTurns,
 			"wiki":          s.cfg.EnableWiki,
 			"wiki_llm":      s.cfg.WikiLLM,
@@ -148,6 +169,7 @@ func (s *Service) RegisterRoutes(r *gin.Engine) {
 	})
 
 	r.POST("/api/rag/collections/:col/documents", s.IngestDocument)
+	r.POST("/api/rag/collections/:col/documents/batch", s.IngestDocumentsBatch)
 	r.GET("/api/rag/collections/:col/documents", s.ListDocuments)
 	r.GET("/api/rag/collections/:col/documents/:doc", s.GetDocument)
 	r.DELETE("/api/rag/collections/:col/documents/:doc", s.DeleteDocument)
@@ -157,6 +179,7 @@ func (s *Service) RegisterRoutes(r *gin.Engine) {
 	r.POST("/api/rag/tasks/:task_id/resume", s.ResumeTask)
 	r.POST("/api/rag/collections/:col/eval", s.EvalCollection)
 	r.GET("/api/rag/index/snapshot", s.SaveSnapshot)
+	r.GET("/api/rag/index/stats", s.IndexStats)
 	s.registerWikiRoutes(r)
 }
 
@@ -240,6 +263,89 @@ func (s *Service) IngestDocument(c *gin.Context) {
 		_, _ = s.compilePool.Enqueue(task.Col, task.DocID)
 	}
 	c.JSON(http.StatusOK, task)
+}
+
+// IngestDocumentsBatch accepts JSON {"documents":[{"title","text","source"},...]}
+// and enqueues/sync-ingests each item. Async → 202; sync → 200.
+func (s *Service) IngestDocumentsBatch(c *gin.Context) {
+	col := c.Param("col")
+	if err := ensureColName(col); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var req struct {
+		Documents []struct {
+			Title  string `json:"title"`
+			Text   string `json:"text" binding:"required"`
+			Source string `json:"source"`
+		} `json:"documents"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if len(req.Documents) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "documents array empty"})
+		return
+	}
+	if len(req.Documents) > 64 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "batch size exceeds 64"})
+		return
+	}
+
+	tasks := make([]*IngestTask, 0, len(req.Documents))
+	async := s.cfg.AsyncIngest && s.pool != nil
+	for _, d := range req.Documents {
+		text, title, source := d.Text, d.Title, d.Source
+		if source == "" {
+			source = "inline"
+		}
+		if title == "" {
+			title = source
+		}
+		if len(text) > s.cfg.MaxDocSizeMB*1024*1024 {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": fmt.Sprintf("doc exceeds %dMB", s.cfg.MaxDocSizeMB)})
+			return
+		}
+		if async {
+			now := time.Now().Unix()
+			task := &IngestTask{
+				TaskID: uuid.NewString(), Col: col, DocID: uuid.NewString(),
+				Status: TaskPending, Progress: 0, CreatedAt: now, UpdatedAt: now,
+			}
+			_ = s.store.SaveTask(task)
+			err := s.pool.Enqueue(ingestJob{
+				Col: col, DocID: task.DocID, Title: title, Source: source, Text: text, TaskID: task.TaskID,
+			})
+			if err == ErrIngestQueueFull {
+				RagIngestTotal.WithLabelValues("rejected").Inc()
+				c.JSON(http.StatusTooManyRequests, gin.H{"error": "ingest queue full", "tasks": tasks})
+				return
+			}
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			RagIngestTotal.WithLabelValues("queued").Inc()
+			tasks = append(tasks, task)
+			continue
+		}
+		task, err := s.ingester.Ingest(c.Request.Context(), col, "", title, source, text)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "tasks": tasks})
+			return
+		}
+		if s.cfg.AutoCompile && s.compilePool != nil && task != nil && task.Status == TaskSuccess {
+			_, _ = s.compilePool.Enqueue(task.Col, task.DocID)
+		}
+		tasks = append(tasks, task)
+	}
+
+	status := http.StatusOK
+	if async {
+		status = http.StatusAccepted
+	}
+	c.JSON(status, gin.H{"tasks": tasks, "count": len(tasks)})
 }
 
 // ---- 文档列表 / 详情 / 删除 ----
@@ -447,6 +553,20 @@ func (s *Service) SaveSnapshot(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "path": path, "size": s.index.Size()})
+}
+
+func (s *Service) IndexStats(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"index_type": s.cfg.IndexType,
+		"dim":        s.embedder.Dim(),
+		"size":       s.index.Size(),
+		"index_dir":  s.cfg.IndexDir,
+		"snapshot":   "tkvx-v2",
+		"tokenizer":  CurrentTokenizerMode(),
+		"chunker":    ActiveChunkerVersion(CurrentTokenizerMode()),
+		"rerank":     s.cfg.EnableRerank,
+		"rerank_url": s.cfg.RerankURL != "",
+	})
 }
 
 // loadAllSnapshots 启动时从 IndexDir 加载所有 *.idx 合并进索引 (重建内存索引).
