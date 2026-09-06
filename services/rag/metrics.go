@@ -31,4 +31,10 @@ var (
 		Name: "rag_index_size",
 		Help: "In-memory vector index entry count.",
 	})
+
+	// RagRouteTotal counts routing decisions by path (M2 Router).
+	RagRouteTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "rag_route_total",
+		Help: "Query routing decisions by path (L1_wiki/L2_single/L3_agentic/L3_degraded).",
+	}, []string{"path"})
 )

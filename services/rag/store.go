@@ -197,12 +197,14 @@ type ChatMessage struct {
 
 // QueryLog 检索/问答日志 (异步写).
 type QueryLog struct {
-	Col        string  `json:"col"`
-	ReqID      string  `json:"req_id"`
-	Query      string  `json:"query"`
+	Col        string   `json:"col"`
+	ReqID      string   `json:"req_id"`
+	Query      string   `json:"query"`
 	Hits       []string `json:"hits"`
-	LatencyMS  int64   `json:"latency_ms"`
-	CreatedAt  int64   `json:"created_at"`
+	Route      string   `json:"route,omitempty"`   // M2 Router 决策 (L1_wiki/L2_single/...)
+	Reason     string   `json:"reason,omitempty"` // M2 路由 reason (审计)
+	LatencyMS  int64    `json:"latency_ms"`
+	CreatedAt  int64    `json:"created_at"`
 }
 
 // ---- 任务状态机 ----

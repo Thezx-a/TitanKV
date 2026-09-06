@@ -198,7 +198,12 @@ func assemblePromptWithHistory(query string, hits []RetrievalHit, history []Chat
 }
 
 // queryLogJSON 手拼避免循环依赖 (QueryLog 已有 json tag, 这里简单序列化).
-func queryLogJSON(col, query string, citations []string, latencyMS int64) string {
-	return fmt.Sprintf(`{"col":%q,"query":%q,"hits":%q,"latency_ms":%d,"created_at":%d}`,
-		col, query, fmt.Sprint(citations), latencyMS, time.Now().Unix())
+// route 为空时省略 (Router 关闭场景).
+func queryLogJSON(col, query string, citations []string, latencyMS int64, route ...string) string {
+	routeField := ""
+	if len(route) > 0 && route[0] != "" {
+		routeField = fmt.Sprintf(`,"route":%q`, route[0])
+	}
+	return fmt.Sprintf(`{"col":%q,"query":%q,"hits":%q%s,"latency_ms":%d,"created_at":%d}`,
+		col, query, fmt.Sprint(citations), routeField, latencyMS, time.Now().Unix())
 }

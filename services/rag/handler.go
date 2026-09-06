@@ -28,7 +28,8 @@ type Service struct {
 	wikiQ       *WikiQuerier
 	compiler    *Compiler
 	compilePool *CompilePool
-	bm25        *BM25Index // M1: 稀疏通道 (nil = 关闭)
+	bm25        *BM25Index    // M1: 稀疏通道 (nil = 关闭)
+	router      *QueryRouter  // M2: 查询路由 (nil = 关闭, 全部走 L2)
 }
 
 // NewService 构造 Service (由 cmd/main.go 调用).
@@ -117,6 +118,10 @@ func NewService(cfg Config) (*Service, error) {
 			Workers: cfg.WikiWorkers, QueueSize: cfg.WikiQueueSize,
 		}, svc.compiler)
 	}
+	// M2: Router 依赖 wikiQ (L1 直答), 在 wiki 初始化之后创建
+	if cfg.EnableRouter {
+		svc.router = NewQueryRouter(svc.wikiQ)
+	}
 	return svc, nil
 }
 
@@ -182,6 +187,7 @@ func (s *Service) RegisterRoutes(r *gin.Engine) {
 			"history_turns": s.cfg.HistoryTurns,
 			"wiki":          s.cfg.EnableWiki,
 			"wiki_llm":      s.cfg.WikiLLM,
+			"router":        s.cfg.EnableRouter,
 		})
 	})
 
@@ -446,6 +452,37 @@ func (s *Service) Retrieve(c *gin.Context) {
 		return
 	}
 	start := time.Now()
+
+	// M2: 路由决策 (Router 关闭时恒为 L2, 不改行为)
+	route := RouteDecision{Path: RouteL2Single, Reason: "router_off"}
+	if s.router != nil {
+		route = s.router.Decide(col, req.Query)
+		RagRouteTotal.WithLabelValues(string(route.Path)).Inc()
+	}
+
+	// L1: wiki 直答路径 (wiki 页在前, 余量用 chunk 补齐; hits 字段保持原有 chunk 语义)
+	if route.Path == RouteL1Wiki && s.wikiQ != nil {
+		wikiHits, fallback, err := WikiFirstRetrieve(c.Request.Context(), col, req.Query, req.TopK, s.wikiQ, s.retriever)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"hits":       fallback,
+			"wiki":       wikiHits,
+			"route":      route,
+			"count":      len(fallback),
+			"wiki_count": len(wikiHits),
+			"latency_ms": time.Since(start).Milliseconds(),
+		})
+		return
+	}
+
+	// L2 单发 / L3 降级 (M3 未实现, 降级不丟弃决策审计)
+	if route.Path == RouteL3Agentic && s.router != nil {
+		route = degradeToL2(route, "agentic_pending_m3")
+		RagRouteTotal.WithLabelValues(string(route.Path)).Inc()
+	}
 	hits, err := s.retriever.Retrieve(c.Request.Context(), col, req.Query, req.TopK)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
@@ -453,6 +490,7 @@ func (s *Service) Retrieve(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"hits":       hits,
+		"route":      route,
 		"count":      len(hits),
 		"latency_ms": time.Since(start).Milliseconds(),
 	})
@@ -503,10 +541,33 @@ func (s *Service) Chat(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 120*time.Second)
 	defer cancel()
 
-	answer, citations, err := s.chat.Ask(ctx, col, req.Query, uid, sid, req.TopK, func(tok string) error {
-		send("token", map[string]string{"text": tok})
-		return nil
-	})
+	// M2: 路由决策. L1 → AskWiki (预编译页直答), L2/L3 → Ask (L3 M3 接管)
+	route := RouteDecision{Path: RouteL2Single, Reason: "router_off"}
+	wikiLane := false
+	if s.router != nil {
+		route = s.router.Decide(col, req.Query)
+		if route.Path == RouteL1Wiki && s.wikiQ != nil {
+			wikiLane = true
+		} else if route.Path == RouteL3Agentic {
+			route = degradeToL2(route, "agentic_pending_m3")
+		}
+		RagRouteTotal.WithLabelValues(string(route.Path)).Inc()
+	}
+
+	var answer string
+	var citations []string
+	var err error
+	if wikiLane {
+		answer, citations, err = s.chat.AskWiki(ctx, col, req.Query, uid, sid, req.TopK, s.wikiQ, func(tok string) error {
+			send("token", map[string]string{"text": tok})
+			return nil
+		})
+	} else {
+		answer, citations, err = s.chat.Ask(ctx, col, req.Query, uid, sid, req.TopK, func(tok string) error {
+			send("token", map[string]string{"text": tok})
+			return nil
+		})
+	}
 	if err != nil {
 		send("error", map[string]string{"msg": err.Error()})
 		return
@@ -514,7 +575,10 @@ func (s *Service) Chat(c *gin.Context) {
 	for _, cid := range citations {
 		send("citation", map[string]string{"doc_id": cid})
 	}
-	send("end", map[string]any{"tokens": len(answer), "latency_ms": time.Since(start).Milliseconds()})
+	send("end", map[string]any{
+		"tokens": len(answer), "latency_ms": time.Since(start).Milliseconds(),
+		"route": route,
+	})
 }
 
 // ---- 任务状态 ----
@@ -592,6 +656,7 @@ func (s *Service) IndexStats(c *gin.Context) {
 		"rerank":     s.cfg.EnableRerank,
 		"rerank_url": s.cfg.RerankURL != "",
 		"bm25":       s.cfg.EnableBM25,
+		"router":     s.cfg.EnableRouter,
 		"bm25_stats": s.bm25StatsIfEnabled(),
 	})
 }
