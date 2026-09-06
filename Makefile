@@ -24,7 +24,7 @@ CMAKE_BUILD_DIR  ?= build
 CMAKE_BUILD_TYPE ?= Release
 JOBS             ?= $(shell nproc 2>/dev/null || echo 4)
 
-GO            ?= go
+GO            ?= $(shell command -v go 2>/dev/null || echo /usr/local/go/bin/go)
 GO_TEST_FLAGS ?= -race -count=1
 GOLINT        ?= golangci-lint
 CLANG_TIDY    ?= clang-tidy
@@ -59,6 +59,10 @@ cpp-lint: ## Run clang-tidy on C++ sources
 # ---------------------------------------------------------
 # Go build / test / lint
 # ---------------------------------------------------------
+.PHONY: rag-eval
+rag-eval: ## Run RAG golden-set eval (Recall@K / MRR / faithfulness quality gate)
+	$(GO) test ./services/rag/ -run 'TestGolden' -count=1 -v -skip Tiktoken
+
 .PHONY: go-build go-test go-lint go-mod go-tidy
 go-mod: ## Tidy and download Go modules
 	$(GO) mod download

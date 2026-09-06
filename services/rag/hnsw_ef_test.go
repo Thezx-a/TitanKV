@@ -31,6 +31,6 @@ func TestNewVectorIndexWithParamsHNSW(t *testing.T) {
 		t.Fatalf("want *HNSWIndex, got %T", idx)
 	}
 	if h.efConstruction != 50 || h.efSearch != 25 {
-		t.Fatalf("params not applied: %+v", *h)
+		t.Fatalf("params not applied: efConstruction=%d efSearch=%d", h.efConstruction, h.efSearch)
 	}
 }

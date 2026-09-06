@@ -1,0 +1,76 @@
+{
+  "collection": "gold",
+  "description": "TitanKV RAG golden dataset: 固定 doc_id 的语料 + 标注查询, 用于 Recall@K / MRR / faithfulness 回归 (M0). local-mock hash embedding 下 keyword 查询可命中, paraphrase 查询天然难命中——这正是 BM25 (M1) 与 agentic (M3) 的改进空间.",
+  "documents": [
+    {
+      "doc_id": "doc-lsm",
+      "title": "LSM-Tree 存储引擎结构",
+      "text": "LSM-Tree (Log-Structured Merge-Tree) 是写优化存储引擎的核心数据结构。写入先进 MemTable (内存跳表), 达到阈值后不可变刷成 SSTable (Sorted String Table) 落盘, 后台 Compaction 将多层 SSTable 合并排序。读取路径: 先查 MemTable, 再逐层查 SSTable, 因此存在读放大; Compaction 代价体现为写放大与空间放大。level-0 SSTable 键范围重叠, level>=1 内键区间互不重叠。TitanKV 的 minikv 即采用 LSM-Tree: MemTable 用 shared_ptr 引用计数管理并发读, WAL 保证崩溃恢复, Manifest 记录层级元数据。"
+    },
+    {
+      "doc_id": "doc-bloom",
+      "title": "布隆过滤器与误判率",
+      "text": "布隆过滤器 (Bloom Filter) 是概率型空间高效结构, 用于判断元素是否可能在集合中。它由位数组与多个哈希函数组成: 插入时将 k 个哈希位置置 1。查询若任一位为 0 则元素一定不存在 (无漏判), 若全为 1 则元素可能存在 (有误判)。误判率公式 p = (1 - e^(-kn/m))^k, 其中 m 为位数组大小, n 为已插入元素数, k 为哈希函数个数。最优哈希个数 k = (m/n) ln2。LSM 引擎在 SSTable 块索引前挂布隆过滤器, 可跳过绝大多数无效查询, 将点查的读放大控制住。minikv 默认误判率配置 0.01。"
+    },
+    {
+      "doc_id": "doc-mvcc",
+      "title": "MVCC 多版本并发控制",
+      "text": "MVCC (Multi-Version Concurrency Control) 多版本并发控制为每条记录维护多个版本, 读事务读取快照版本, 写事务创建新版本, 从而让读写不互相阻塞。每个版本携带事务时间戳或版本号, 快照读按可见性规则选择版本。在存储引擎中, MVCC 常与undo日志或版本链配合实现回滚与隔离级别。LSM-Tree 天然亲和 MVCC: 追加写入即天然多版本, 旧版本由 Compaction 按垃圾回收规则清理。minikv 的 MVCC 实现了序列号版本与快照读接口。"
+    },
+    {
+      "doc_id": "doc-wal",
+      "title": "WAL 预写日志与崩溃恢复",
+      "text": "WAL (Write-Ahead Log) 预写日志是数据库崩溃恢复的标准机制: 写操作先顺序追加到日志文件, 落盘成功后才修改内存与磁盘数据结构。宕机后通过重放 (replay) 日志恢复未落盘的修改, 保证持久性。顺序追加写吞吐远高于随机写, 这是 LSM 写优化的根基。WAL 通常配合检查点 (checkpoint) 截断: 检查点之前的数据已持久化, 日志可以截断。minikv 的 wal-1.log 即预写日志, 每条记录带 CRC 校验, 恢复时校验失败则截断到一致点。"
+    },
+    {
+      "doc_id": "doc-hnsw",
+      "title": "HNSW 分层可导航小世界图索引",
+      "text": "HNSW (Hierarchical Navigable Small World) 是近似最近邻搜索 (ANN) 的图索引算法。它构建多层邻接图: 上层稀疏长边负责粗定位, 底层稠密短边负责精搜。查询从顶层入口贪心下行, 在底层用 ef_search 宽度做束搜索。构建期参数 ef_construction 控制插入时的搜索宽度, 越大召回越高但构建越慢。HNSW 查询复杂度近似对数级, 是向量检索 (RAG 检索通道) 的主流索引。TitanKV RAG 服务自研 Go 实现 HNSW, 支持 ef 动态调节与删除墓碑标记。"
+    },
+    {
+      "doc_id": "doc-skynet",
+      "title": "skynet C++20 协程网络库",
+      "text": "skynet 是 TitanKV 的高性能网络前置代理, 基于 C++20 无栈协程实现。协程调度在事件循环上, 每个连接一个协程, 读写等待时挂起, 事件到达时恢复, 避免线程上下文切换开销。公开端口 8080 接收客户端连接, 将请求转发到内网 Gin 网关 18080。对比每连接一线程模型, 协程将高并发下的内存占用与调度开销降低一个数量级。skynet 配置文件 gateway.yaml 定义监听地址与上游转发规则。"
+    },
+    {
+      "doc_id": "doc-jwt",
+      "title": "JWT 认证与 RBAC 鉴权",
+      "text": "JWT (JSON Web Token) 是无状态认证令牌: 服务端签发包含用户声明 (claims) 的签名 token, 客户端每次请求携带, 服务端只需用密钥验证签名即可确认身份, 无需会话存储。JWT 由 header.payload.signature 三段组成, 常用 HMAC-SHA256 或 RS256 签名。RBAC (Role-Based Access Control) 基于角色的访问控制在 JWT claims 中携带角色, 网关按角色匹配路由权限。TitanKV 网关对 /api/rag 路由区分 rag:ingest (写) 与 rag:query (读) 两种权限, 认证不通过的请求返回 401。"
+    },
+    {
+      "doc_id": "doc-chunk",
+      "title": "RAG chunking 文档切块策略",
+      "text": "chunking 切块是 RAG 入库质量的第一道关口。定长硬切会割裂语义, 结构感知切分按文档结构切: markdown 文档按标题层级切分, FAQ 文档按问答对切分, 代码文档按函数边界切分。切块间保留 overlap 重叠区, 减少关键句被切断。块大小用 token 数而非字符数衡量, chunker 版本不一致会触发重切。块过大稀释向量语义, 块过小丢失上下文, 512 token 左右是常见工程起点。检索时 heading 元数据可回溯原文位置。"
+    }
+  ],
+  "queries": [
+    { "query": "LSM-Tree MemTable SSTable Compaction", "relevant": ["gold/doc-lsm/00000000"], "expected_points": ["MemTable", "SSTable", "Compaction"] },
+    { "query": "读放大 写放大 level-0", "relevant": ["gold/doc-lsm/00000000"], "expected_points": ["读放大"] },
+    { "query": "LSM-Tree 结构 minikv", "relevant": ["gold/doc-lsm/00000000"], "expected_points": ["LSM-Tree"] },
+    { "query": "布隆过滤器 误判率 公式", "relevant": ["gold/doc-bloom/00000000"], "expected_points": ["误判率", "位数组"] },
+    { "query": "Bloom Filter false positive", "relevant": ["gold/doc-bloom/00000000"], "expected_points": ["Bloom Filter"] },
+    { "query": "最优哈希函数个数", "relevant": ["gold/doc-bloom/00000000"], "expected_points": ["哈希函数"] },
+    { "query": "MVCC 多版本并发控制", "relevant": ["gold/doc-mvcc/00000000"], "expected_points": ["MVCC"] },
+    { "query": "快照读 版本 可见性", "relevant": ["gold/doc-mvcc/00000000"], "expected_points": ["快照"] },
+    { "query": "WAL 预写日志 崩溃恢复", "relevant": ["gold/doc-wal/00000000"], "expected_points": ["WAL", "崩溃恢复"] },
+    { "query": "重放日志 检查点 checkpoint", "relevant": ["gold/doc-wal/00000000"], "expected_points": ["检查点"] },
+    { "query": "CRC 校验 截断", "relevant": ["gold/doc-wal/00000000"], "expected_points": ["CRC"] },
+    { "query": "HNSW ef_search ef_construction", "relevant": ["gold/doc-hnsw/00000000"], "expected_points": ["ef_search", "ef_construction"] },
+    { "query": "近似最近邻搜索 ANN 图索引", "relevant": ["gold/doc-hnsw/00000000"], "expected_points": ["近似最近邻"] },
+    { "query": "分层图 束搜索", "relevant": ["gold/doc-hnsw/00000000"], "expected_points": ["束搜索"] },
+    { "query": "skynet C++20 协程 网络库", "relevant": ["gold/doc-skynet/00000000"], "expected_points": ["协程", "skynet"] },
+    { "query": "无栈协程 事件循环 调度", "relevant": ["gold/doc-skynet/00000000"], "expected_points": ["事件循环"] },
+    { "query": "8080 端口 转发 网关", "relevant": ["gold/doc-skynet/00000000"], "expected_points": ["8080"] },
+    { "query": "JWT 签名 claims 认证", "relevant": ["gold/doc-jwt/00000000"], "expected_points": ["JWT"] },
+    { "query": "RBAC 角色 权限 控制", "relevant": ["gold/doc-jwt/00000000"], "expected_points": ["RBAC"] },
+    { "query": "rag:ingest rag:query 401", "relevant": ["gold/doc-jwt/00000000"], "expected_points": ["401"] },
+    { "query": "chunking 切块 overlap", "relevant": ["gold/doc-chunk/00000000"], "expected_points": ["overlap"] },
+    { "query": "markdown 标题切分 FAQ 问答对", "relevant": ["gold/doc-chunk/00000000"], "expected_points": ["标题"] },
+    { "query": "块大小 token 数 512", "relevant": ["gold/doc-chunk/00000000"], "expected_points": ["512"] },
+    { "query": "LSM-Tree 布隆过滤器 点查 读放大", "relevant": ["gold/doc-lsm/00000000", "gold/doc-bloom/00000000"], "expected_points": ["读放大", "布隆过滤器"] },
+    { "query": "WAL 顺序写 LSM 写优化", "relevant": ["gold/doc-wal/00000000", "gold/doc-lsm/00000000"], "expected_points": ["顺序", "写优化"] },
+    { "query": "向量检索 HNSW 与 RAG chunking 块大小", "relevant": ["gold/doc-hnsw/00000000", "gold/doc-chunk/00000000"], "expected_points": ["HNSW", "块"] },
+    { "query": "为什么宕机后数据不会丢", "relevant": ["gold/doc-wal/00000000"], "expected_points": ["WAL"] },
+    { "query": "如何判断一个键肯定不在某个 SSTable 里", "relevant": ["gold/doc-bloom/00000000"], "expected_points": ["布隆过滤器"] }
+  ]
+}

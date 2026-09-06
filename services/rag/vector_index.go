@@ -95,11 +95,12 @@ func (idx *SideIndex) TopK(query []float32, k int) []Hit {
 	if k > len(cands) {
 		k = len(cands)
 	}
-	// 部分选择排序取 topK (避免全排序)
+	// 部分选择排序取 topK (避免全排序); 平局按 chunkID 升序, 保证零分平局下结果确定
 	for i := 0; i < k && i < len(cands); i++ {
 		maxI := i
 		for j := i + 1; j < len(cands); j++ {
-			if cands[j].score > cands[maxI].score {
+			if cands[j].score > cands[maxI].score ||
+				(cands[j].score == cands[maxI].score && cands[j].id < cands[maxI].id) {
 				maxI = j
 			}
 		}
