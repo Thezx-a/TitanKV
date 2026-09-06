@@ -28,8 +28,9 @@ type Service struct {
 	wikiQ       *WikiQuerier
 	compiler    *Compiler
 	compilePool *CompilePool
-	bm25        *BM25Index    // M1: 稀疏通道 (nil = 关闭)
-	router      *QueryRouter  // M2: 查询路由 (nil = 关闭, 全部走 L2)
+	bm25        *BM25Index       // M1: 稀疏通道 (nil = 关闭)
+	router      *QueryRouter     // M2: 查询路由 (nil = 关闭, 全部走 L2)
+	agentic     *AgenticRetriever // M3: L3 带预算循环 (nil = L3 降级)
 }
 
 // NewService 构造 Service (由 cmd/main.go 调用).
@@ -121,6 +122,12 @@ func NewService(cfg Config) (*Service, error) {
 	// M2: Router 依赖 wikiQ (L1 直答), 在 wiki 初始化之后创建
 	if cfg.EnableRouter {
 		svc.router = NewQueryRouter(svc.wikiQ)
+		// M3: L3 agentic 循环挂在同一 retriever 上 (Router on 才有入口)
+		if cfg.EnableAgentic {
+			svc.agentic = NewAgenticRetriever(ret, AgenticConfig{
+				MaxRounds: cfg.AgenticMaxRounds, MinRelevant: cfg.AgenticMinRelevant,
+			})
+		}
 	}
 	return svc, nil
 }
@@ -478,9 +485,24 @@ func (s *Service) Retrieve(c *gin.Context) {
 		return
 	}
 
-	// L2 单发 / L3 降级 (M3 未实现, 降级不丟弃决策审计)
+	// L3: agentic 循环 (预算硬封顶) 或降级单发
 	if route.Path == RouteL3Agentic && s.router != nil {
-		route = degradeToL2(route, "agentic_pending_m3")
+		if s.agentic != nil {
+			ag, err := s.agentic.Retrieve(c.Request.Context(), col, req.Query, req.TopK)
+			if err != nil {
+				c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"hits":       ag.Hits,
+				"route":      RouteDecision{Path: RouteL3Agentic, Reason: route.Reason},
+				"agentic":    ag,
+				"count":      len(ag.Hits),
+				"latency_ms": time.Since(start).Milliseconds(),
+			})
+			return
+		}
+		route = degradeToL2(route, "agentic_disabled")
 		RagRouteTotal.WithLabelValues(string(route.Path)).Inc()
 	}
 	hits, err := s.retriever.Retrieve(c.Request.Context(), col, req.Query, req.TopK)
@@ -541,15 +563,24 @@ func (s *Service) Chat(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 120*time.Second)
 	defer cancel()
 
-	// M2: 路由决策. L1 → AskWiki (预编译页直答), L2/L3 → Ask (L3 M3 接管)
+	// M2: 路由决策. L1 → AskWiki (预编译页直答), L2 → Ask, L3 → agentic 检索 + AskWithHits
 	route := RouteDecision{Path: RouteL2Single, Reason: "router_off"}
 	wikiLane := false
+	var preHits []RetrievalHit // L3 agentic 预取命中 (非 nil 时走 AskWithHits)
 	if s.router != nil {
 		route = s.router.Decide(col, req.Query)
-		if route.Path == RouteL1Wiki && s.wikiQ != nil {
+		switch {
+		case route.Path == RouteL1Wiki && s.wikiQ != nil:
 			wikiLane = true
-		} else if route.Path == RouteL3Agentic {
-			route = degradeToL2(route, "agentic_pending_m3")
+		case route.Path == RouteL3Agentic && s.agentic != nil:
+			ag, err := s.agentic.Retrieve(ctx, col, req.Query, req.TopK)
+			if err != nil {
+				send("error", map[string]string{"msg": err.Error()})
+				return
+			}
+			preHits = ag.Hits
+		case route.Path == RouteL3Agentic:
+			route = degradeToL2(route, "agentic_disabled")
 		}
 		RagRouteTotal.WithLabelValues(string(route.Path)).Inc()
 	}
@@ -557,16 +588,17 @@ func (s *Service) Chat(c *gin.Context) {
 	var answer string
 	var citations []string
 	var err error
-	if wikiLane {
-		answer, citations, err = s.chat.AskWiki(ctx, col, req.Query, uid, sid, req.TopK, s.wikiQ, func(tok string) error {
-			send("token", map[string]string{"text": tok})
-			return nil
-		})
-	} else {
-		answer, citations, err = s.chat.Ask(ctx, col, req.Query, uid, sid, req.TopK, func(tok string) error {
-			send("token", map[string]string{"text": tok})
-			return nil
-		})
+	tok := func(tok string) error {
+		send("token", map[string]string{"text": tok})
+		return nil
+	}
+	switch {
+	case wikiLane:
+		answer, citations, err = s.chat.AskWiki(ctx, col, req.Query, uid, sid, req.TopK, s.wikiQ, tok)
+	case preHits != nil:
+		answer, citations, err = s.chat.AskWithHits(ctx, col, req.Query, uid, sid, preHits, tok)
+	default:
+		answer, citations, err = s.chat.Ask(ctx, col, req.Query, uid, sid, req.TopK, tok)
 	}
 	if err != nil {
 		send("error", map[string]string{"msg": err.Error()})

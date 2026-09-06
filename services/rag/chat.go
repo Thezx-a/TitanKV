@@ -44,16 +44,30 @@ func (o *ChatOrchestrator) Ask(
 	if topK <= 0 {
 		topK = o.topK
 	}
-	start := time.Now()
-	defer func() { RagChatDuration.Observe(time.Since(start).Seconds()) }()
-
-	// 1) 检索
 	hits, err := o.retriever.Retrieve(ctx, col, query, topK)
 	if err != nil {
 		return "", nil, fmt.Errorf("retrieve: %w", err)
 	}
+	return o.generate(ctx, col, query, uid, sid, hits, onToken)
+}
 
-	// 2) 可选历史
+// AskWithHits 用预取命中直接生成 (M3: L3 agentic 循环在外部完成检索后接入).
+func (o *ChatOrchestrator) AskWithHits(
+	ctx context.Context, col, query, uid, sid string, hits []RetrievalHit,
+	onToken func(string) error,
+) (answer string, citations []string, err error) {
+	return o.generate(ctx, col, query, uid, sid, hits, onToken)
+}
+
+// generate 是 Ask/AskWithHits 共用尾段: 历史 → prompt → 流式生成 → 引用/历史/qlog.
+func (o *ChatOrchestrator) generate(
+	ctx context.Context, col, query, uid, sid string, hits []RetrievalHit,
+	onToken func(string) error,
+) (answer string, citations []string, err error) {
+	start := time.Now()
+	defer func() { RagChatDuration.Observe(time.Since(start).Seconds()) }()
+
+	// 可选历史
 	var history []ChatMessage
 	if o.historyTurns > 0 && uid != "" && sid != "" {
 		if msgs, e := o.store.ListChat(uid, sid); e == nil {
@@ -61,10 +75,10 @@ func (o *ChatOrchestrator) Ask(
 		}
 	}
 
-	// 3) 组装 prompt
+	// 组装 prompt
 	prompt := assemblePromptWithHistory(query, hits, history)
 
-	// 4) 流式生成, 同时累积 answer
+	// 流式生成, 同时累积 answer
 	var b strings.Builder
 	err = o.chat.StreamComplete(ctx, prompt, func(tok string) error {
 		b.WriteString(tok)
@@ -75,7 +89,7 @@ func (o *ChatOrchestrator) Ask(
 	}
 	answer = b.String()
 
-	// 5) 引用 doc_id 去重
+	// 引用 doc_id 去重
 	seen := make(map[string]bool)
 	for _, h := range hits {
 		if !seen[h.DocID] {
@@ -84,14 +98,14 @@ func (o *ChatOrchestrator) Ask(
 		}
 	}
 
-	// 6) 写会话历史 (uid/sid 为空跳过)
+	// 写会话历史 (uid/sid 为空跳过)
 	if uid != "" && sid != "" {
 		base := time.Now().Unix()
 		_ = o.store.AppendChat(uid, sid, "user", query, nil, int(base*2))
 		_ = o.store.AppendChat(uid, sid, "assistant", answer, citations, int(base*2+1))
 	}
 
-	// 7) query log
+	// query log
 	_ = o.store.Put(qlogKey(col, fmt.Sprintf("%d", start.UnixNano())), queryLogJSON(col, query, citations, time.Since(start).Milliseconds()))
 
 	return answer, citations, nil

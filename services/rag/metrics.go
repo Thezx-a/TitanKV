@@ -37,4 +37,10 @@ var (
 		Name: "rag_route_total",
 		Help: "Query routing decisions by path (L1_wiki/L2_single/L3_agentic/L3_degraded).",
 	}, []string{"path"})
+
+	// RagAgenticRoundsTotal counts agentic loop round outcomes (M3).
+	RagAgenticRoundsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "rag_agentic_rounds_total",
+		Help: "Agentic loop rounds by grading outcome (sufficient/insufficient).",
+	}, []string{"outcome"})
 )

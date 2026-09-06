@@ -85,23 +85,26 @@ assert r["route"]["path"]=="L2_single", r["route"]
 assert "wiki" not in r
 print("route:", r["route"]["path"], "| reason:", r["route"]["reason"])' || fail "L2 route: $resp"
 
-step "5) L3: 对比型查询 → route=L3_degraded (agentic pending M3)"
+step "5) L3: 对比型查询 → route=L3_agentic + 多轮审计"
 resp=$(curl -sf -X POST "http://$RAG/api/rag/collections/e2e/retrieve" \
   -H 'Content-Type: application/json' -d '{"query":"LSM Tree 和 Bloom Filter 的区别","top_k":3}')
 echo "$resp" | python3 -c '
 import json,sys
 r=json.load(sys.stdin)
-assert r["route"]["path"]=="L3_degraded", r["route"]
-assert "agentic_pending_m3" in r["route"]["reason"], r["route"]
+assert r["route"]["path"]=="L3_agentic", r["route"]
+ag=r["agentic"]
+assert ag["rounds_used"]>=1 and len(ag["rounds"])>=1, ag
+assert ag["reason"] in ("sufficient","budget_exhausted","no_more_plans"), ag
 assert r["count"]>0
-print("route:", r["route"]["path"], "| reason:", r["route"]["reason"])' || fail "L3 route: $resp"
+print("route:", r["route"]["path"], "| rounds:", ag["rounds_used"], "| reason:", ag["reason"], "| hits:", r["count"])' || fail "L3 route: $resp"
 
 step "6) /metrics 暴露 rag_route_total 三路计数"
 metrics=$(curl -sf "http://$RAG/metrics")
 echo "$metrics" | grep -q 'rag_route_total{path="L1_wiki"}' || fail "metric L1 missing"
 echo "$metrics" | grep -q 'rag_route_total{path="L2_single"}' || fail "metric L2 missing"
-echo "$metrics" | grep -q 'rag_route_total{path="L3_degraded"}' || fail "metric L3_degraded missing"
-echo "$metrics" | grep 'rag_route_total' | head -3
+echo "$metrics" | grep -q 'rag_route_total{path="L3_agentic"}' || fail "metric L3_agentic missing"
+echo "$metrics" | grep -q 'rag_agentic_rounds_total' || fail "metric agentic rounds missing"
+echo "$metrics" | grep -E 'rag_route_total|rag_agentic_rounds_total' | grep -v '^#' | head -5
 
 echo
-echo "[E2E-PASS] Router 端到端 6 步全部通过 (L1 直答 / L2 单发 / L3 降级 / metrics)"
+echo "[E2E-PASS] Router 端到端 6 步全部通过 (L1 直答 / L2 单发 / L3 agentic / metrics)"

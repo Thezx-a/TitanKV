@@ -169,7 +169,7 @@ func TestRetrieveEndpointRouteL3Degraded(t *testing.T) {
 	if resp.Route.Path != RouteL3Degraded {
 		t.Fatalf("route = %+v, want L3_degraded", resp.Route)
 	}
-	if !strings.Contains(resp.Route.Reason, "agentic_pending_m3") {
+	if !strings.Contains(resp.Route.Reason, "agentic_disabled") {
 		t.Fatalf("reason should carry audit trail: %+v", resp.Route)
 	}
 	if resp.Count < 0 {

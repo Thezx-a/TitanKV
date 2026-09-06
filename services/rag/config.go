@@ -66,8 +66,11 @@ type Config struct {
 	AutoCompile   bool // RAG_WIKI_AUTO_COMPILE, 默认 true（ingest success 后自动 enqueue）
 
 	// M1+: 检索增强
-	EnableBM25 bool // RAG_ENABLE_BM25, 默认 true（BM25 稀疏通道与 HNSW 并行，RRF 融合）
-	EnableRouter bool // RAG_ENABLE_ROUTER, 默认 false（M2 规则路由：L1 wiki 直答/L2 单发/L3 降级；先观察日志再放量）
+	EnableBM25         bool // RAG_ENABLE_BM25, 默认 true（BM25 稀疏通道与 HNSW 并行，RRF 融合）
+	EnableRouter       bool // RAG_ENABLE_ROUTER, 默认 false（M2 规则路由：L1 wiki 直答/L2 单发/L3 降级；先观察日志再放量）
+	EnableAgentic      bool // RAG_ENABLE_AGENTIC, 默认 true（M3：Router L3 命中时启用带预算 agentic 循环）
+	AgenticMaxRounds   int  // RAG_AGENTIC_MAX_ROUNDS, 默认 2（子查询轮数硬预算，不含 round 1）
+	AgenticMinRelevant int  // RAG_AGENTIC_MIN_RELEVANT, 默认 2（启发式评分：足够所需相关命中数）
 }
 
 // LoadConfig 从环境变量加载配置, 缺省值保证空环境也能启动 (MVP 可运行).
@@ -112,6 +115,9 @@ func LoadConfig() Config {
 		AutoCompile:        getenvBool("RAG_WIKI_AUTO_COMPILE", true),
 		EnableBM25:         getenvBool("RAG_ENABLE_BM25", true),
 		EnableRouter:       getenvBool("RAG_ENABLE_ROUTER", false),
+		EnableAgentic:      getenvBool("RAG_ENABLE_AGENTIC", true),
+		AgenticMaxRounds:   getenvInt("RAG_AGENTIC_MAX_ROUNDS", 2),
+		AgenticMinRelevant: getenvInt("RAG_AGENTIC_MIN_RELEVANT", 2),
 	}
 }
 
