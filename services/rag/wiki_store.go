@@ -58,12 +58,21 @@ func wikiTaskKey(taskID string) string {
 
 // WikiStore persists compiled wiki pages/edges on the same Store (minikv).
 type WikiStore struct {
-	store *Store
+	store        *Store
+	keepVersions int // M5: 页面归档保留版本数 (0 = 默认 3)
 }
 
 // NewWikiStore wraps an existing RAG Store.
 func NewWikiStore(store *Store) *WikiStore {
-	return &WikiStore{store: store}
+	return &WikiStore{store: store, keepVersions: 3}
+}
+
+// SetKeepVersions 设置页面归档保留版本数 (M5, ≤0 重置为默认 3).
+func (w *WikiStore) SetKeepVersions(n int) {
+	if n <= 0 {
+		n = 3
+	}
+	w.keepVersions = n
 }
 
 // SaveRaw writes immutable source bytes + sha256 meta as JSON envelope.
@@ -82,6 +91,15 @@ func (w *WikiStore) SaveRaw(col, srcID string, body []byte, sha256hex string) er
 func (w *WikiStore) SavePagesAndEdges(col string, pages []WikiPage, edges []WikiEdge) error {
 	now := time.Now().Unix()
 	ops := make([]data.BatchOp, 0, len(pages)+len(edges)+1)
+
+	// M5: 覆盖前归档当前 live 页 (版本化, 支撑回滚)
+	for i := range pages {
+		if cur, err := w.GetPage(col, pages[i].Frontmatter.Slug); err == nil && cur != nil {
+			if err := w.archiveCurrentPage(col, cur, w.keepVersions); err != nil {
+				return fmt.Errorf("archive %s: %w", pages[i].Frontmatter.Slug, err)
+			}
+		}
+	}
 
 	entries := make([]WikiIndexEntry, 0, len(pages))
 	for i := range pages {
@@ -454,4 +472,147 @@ func (w *WikiStore) ResolveSlugExact(col, query string) (*WikiPage, error) {
 		}
 	}
 	return nil, nil
+}
+
+// ---- M5: 页面版本化与回滚 ----
+//
+// key 布局 (独立前缀, 不进 wikiPagePrefix 扫描):
+//
+//	wiki:pver:{col}:{slug}:head        → 当前版本号 (int)
+//	wiki:pver:{col}:{slug}:{ver:06d}   → 归档的 WikiPage JSON
+//
+// 语义: 每次 SavePagesAndEdges 覆盖前, 先把当前 live 页归档为 head+1;
+// 回滚 = 把指定历史版本写回 live (回滚动作本身不再归档, 走 log 审计);
+// 归档保留 keepVersions 份, 超出按版本号从旧到新淘汰.
+
+func wikiPageVerHeadKey(col, slug string) string {
+	return fmt.Sprintf("wiki:pver:%s:%s:head", col, slug)
+}
+
+func wikiPageVerKey(col, slug string, ver int) string {
+	return fmt.Sprintf("wiki:pver:%s:%s:%06d", col, slug, ver)
+}
+
+func wikiPageVerPrefix(col, slug string) string {
+	return fmt.Sprintf("wiki:pver:%s:%s:", col, slug)
+}
+
+// loadPageVerHead 返回当前版本号 (0 = 无历史).
+func (w *WikiStore) loadPageVerHead(col, slug string) (int, error) {
+	raw, ok, err := w.store.Get(wikiPageVerHeadKey(col, slug))
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
+		return 0, nil
+	}
+	var n int
+	if _, err := fmt.Sscanf(strings.TrimSpace(raw), "%d", &n); err != nil {
+		return 0, nil
+	}
+	return n, nil
+}
+
+// archiveCurrentPage 把 live 页归档为 head+1 并淘汰超限旧版.
+func (w *WikiStore) archiveCurrentPage(col string, p *WikiPage, keepVersions int) error {
+	if p == nil {
+		return nil
+	}
+	head, err := w.loadPageVerHead(col, p.Frontmatter.Slug)
+	if err != nil {
+		return err
+	}
+	next := head + 1
+	b, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	ops := []data.BatchOp{
+		{Put: true, Key: wikiPageVerKey(col, p.Frontmatter.Slug, next), Value: string(b)},
+		{Put: true, Key: wikiPageVerHeadKey(col, p.Frontmatter.Slug), Value: fmt.Sprintf("%d", next)},
+	}
+	if err := w.store.WriteBatch(ops); err != nil {
+		return err
+	}
+	// 淘汰 keepVersions 之外的旧版
+	if keepVersions > 0 {
+		start, end := prefixRange(wikiPageVerPrefix(col, p.Frontmatter.Slug))
+		pairs, err := w.store.Scan(start, end)
+		if err != nil {
+			return err
+		}
+		minKeep := next - keepVersions
+		for _, pr := range pairs {
+			var ver int
+			if _, err := fmt.Sscanf(pr.Key[len(wikiPageVerPrefix(col, p.Frontmatter.Slug)):], "%06d", &ver); err != nil {
+				continue
+			}
+			if ver <= minKeep {
+				if err := w.store.Delete(pr.Key); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// RollbackPage 把 slug 页回滚到指定版本 (0 = 上一版), 并刷新索引与审计日志.
+func (w *WikiStore) RollbackPage(col, slug string, toVersion int) (*WikiPage, error) {
+	head, err := w.loadPageVerHead(col, slug)
+	if err != nil {
+		return nil, err
+	}
+	if head == 0 {
+		return nil, fmt.Errorf("no archived versions for %s/%s", col, slug)
+	}
+	if toVersion == 0 {
+		// 0 = 上一版 = head 归档 (归档发生在覆盖前, head 即覆盖前状态)
+		toVersion = head
+	}
+	if toVersion < 1 || toVersion > head {
+		return nil, fmt.Errorf("version %d out of range (1..%d)", toVersion, head)
+	}
+	raw, ok, err := w.store.Get(wikiPageVerKey(col, slug, toVersion))
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("version %d not found (pruned?)", toVersion)
+	}
+	var p WikiPage
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		return nil, fmt.Errorf("unmarshal archived page: %w", err)
+	}
+	p.Frontmatter.UpdatedAt = time.Now().Unix()
+	if err := w.store.PutJSON(wikiPageKey(col, slug), p); err != nil {
+		return nil, err
+	}
+	// 索引条目同步 (title/summary 可能与新版不同)
+	if err := w.rebuildIndex(col); err != nil {
+		return nil, err
+	}
+	_ = w.AppendLog(col, WikiLogEntry{
+		Action: "rollback", Subject: slug,
+		Detail: fmt.Sprintf("head=%d restored=%d", head, toVersion),
+	})
+	return &p, nil
+}
+
+// ListPageVersions 返回 slug 的可用归档版本号 (升序).
+func (w *WikiStore) ListPageVersions(col, slug string) ([]int, error) {
+	start, end := prefixRange(wikiPageVerPrefix(col, slug))
+	pairs, err := w.store.Scan(start, end)
+	if err != nil {
+		return nil, err
+	}
+	var out []int
+	pfx := wikiPageVerPrefix(col, slug)
+	for _, pr := range pairs {
+		var ver int
+		if _, err := fmt.Sscanf(pr.Key[len(pfx):], "%06d", &ver); err == nil {
+			out = append(out, ver)
+		}
+	}
+	return out, nil
 }

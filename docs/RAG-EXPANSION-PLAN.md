@@ -176,11 +176,11 @@ make rag-eval   # 三指标齐出，故意注入一条坏答案 → CI 门禁能
 ### M5：Wiki 审计与回滚（~1 天，可与 M6 并行）——对应 H9 隐性需求
 
 任务：
-- [ ] WikiStore 版本化：compile 时保留上一版页面（minikv key 加版本段），`RAG_WIKI_KEEP_VERSIONS=3`
-- [ ] `POST /api/rag/collections/:col/wiki/:slug/rollback` 回滚端点
-- [ ] 审计任务：抽查 LLM 摘要页的引用支撑度（复用 M4 faithfulness 规则）
+- [x] WikiStore 版本化：compile 时保留上一版页面（minikv key 加版本段），`RAG_WIKI_KEEP_VERSIONS=3`
+- [x] `POST /api/rag/collections/:col/wiki/pages/:slug/rollback` 回滚端点（body `{"version":0}` = 撤销最近一次覆盖）
+- [x] 审计：`GET .../wiki/audit` 全页引用支撑度报告（复用 M4 faithfulness 规则，零 LLM；低于 0.6 页面点名句子+排序置顶，审计动作落 wiki log）
 
-验收（E2E）：compile → 篡改一页 → rollback → 断言内容恢复。
+验收（E2E，`scripts/e2e_rag_wiki.sh`）：compile → minikv 原生协议直写幻觉页（Raft/Kafka 虚构断言）→ rollback → 断言内容恢复为 v1 → audit 报告 faithfulness=1.0。**全部 PASS**。
 
 ### M6：文档收口（~0.5 天）
 

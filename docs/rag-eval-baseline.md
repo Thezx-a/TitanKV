@@ -17,6 +17,13 @@ M4 说明：
 - KeyPointRecall：检索命中文本对 golden `expected_points` 要点的覆盖率，防「ID 对但内容不含要点」的假阳性
 - extractive faithfulness：以 top-1 原文为参照答案，对引用的忠实度必须恒为 1（评分器/hydration 管道自检）
 - 坏答案注入验收：`TestFaithGateBlocksHallucination` 验证幻觉断言（引用中不存在的实体）被门禁拦截
+
+## M5 后补记（2026-09-06，Wiki 版本化 + 审计）
+
+- Wiki 页面版本化（`wiki:pver:{col}:{slug}:{ver}`）：compile 覆盖前自动归档当前版，`RAG_WIKI_KEEP_VERSIONS`（默认 3）淘汰旧版
+- `POST .../wiki/pages/:slug/rollback`：撤销最近一次覆盖（version=0）或回滚到指定归档版，索引同步重建、动作落 wiki log
+- `GET .../wiki/audit`：全页引用支撑度审计（复用 M4 faithfulness 规则，零 LLM），低于 0.6 的页面点名支撑不足句子并排序置顶
+- E2E（`scripts/e2e_rag_wiki.sh`）：compile → minikv 原生协议直写幻觉页 → rollback → 内容恢复 v1 → audit faithfulness=1.0，全部 PASS
 | 查询数 | 28（关键词 25 + 改述 3） | — |
 
 说明：

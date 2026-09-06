@@ -23,6 +23,8 @@ func (s *Service) registerWikiRoutes(r *gin.Engine) {
 	r.GET("/api/rag/collections/:col/wiki/graph", s.WikiGetGraph)
 	r.GET("/api/rag/collections/:col/wiki/contested", s.WikiListContested)
 	r.POST("/api/rag/collections/:col/wiki/ask", s.WikiAsk)
+	r.POST("/api/rag/collections/:col/wiki/pages/:slug/rollback", s.WikiRollback) // M5
+	r.GET("/api/rag/collections/:col/wiki/audit", s.WikiAudit)                    // M5
 }
 
 // WikiCompile enqueues async compile for one doc or all docs in the collection.
@@ -187,4 +189,39 @@ func (s *Service) WikiAsk(c *gin.Context) {
 		}
 	}
 	send("end", map[string]any{"tokens": len([]rune(answer)), "latency_ms": time.Since(start).Milliseconds()})
+}
+
+// ---- M5: 版本回滚与引用支撑审计 ----
+
+// WikiRollback POST .../wiki/pages/:slug/rollback
+// body: {"version": 0}  (0 = 上一版; 否则回滚到指定归档版本)
+func (s *Service) WikiRollback(c *gin.Context) {
+	col := c.Param("col")
+	slug := c.Param("slug")
+	var req struct {
+		Version int `json:"version"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
+	p, err := s.wiki.RollbackPage(col, slug, req.Version)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok":   true,
+		"page": p,
+	})
+}
+
+// WikiAudit GET .../wiki/audit
+// 对全部 wiki 页跑引用支撑度审计 (复用 M4 faithfulness 规则, 零 LLM).
+func (s *Service) WikiAudit(c *gin.Context) {
+	col := c.Param("col")
+	report, err := AuditWikiSources(c.Request.Context(), s.wiki, s.store, col)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, report)
 }

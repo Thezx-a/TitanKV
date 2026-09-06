@@ -28,8 +28,8 @@ type Service struct {
 	wikiQ       *WikiQuerier
 	compiler    *Compiler
 	compilePool *CompilePool
-	bm25        *BM25Index       // M1: 稀疏通道 (nil = 关闭)
-	router      *QueryRouter     // M2: 查询路由 (nil = 关闭, 全部走 L2)
+	bm25        *BM25Index        // M1: 稀疏通道 (nil = 关闭)
+	router      *QueryRouter      // M2: 查询路由 (nil = 关闭, 全部走 L2)
 	agentic     *AgenticRetriever // M3: L3 带预算循环 (nil = L3 降级)
 }
 
@@ -109,6 +109,7 @@ func NewService(cfg Config) (*Service, error) {
 	if cfg.EnableWiki {
 		wiki := NewWikiStore(store)
 		svc.wiki = wiki
+		wiki.SetKeepVersions(cfg.WikiKeepVersions)
 		svc.wikiQ = NewWikiQuerier(wiki)
 		var chatForWiki ChatProvider
 		if cfg.WikiLLM {
