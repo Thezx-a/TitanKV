@@ -1,8 +1,8 @@
 # TitanKV × RAG — 架构层级图与项目讲解
 
-> 版本：v1.1
+> 版本：v1.2
 > 状态：已落地（随 `make run-all` 启动，默认 :8085）
-> 关联方案：[`RagKv.md`](../RagKv.md) (v2.0)
+> 关联方案：[`RagKv.md`](../RagKv.md) (v3.0)
 > 仓库根：`TitanKV`（历史名 SpectrumCore 已废弃）
 > 编译验证：`go build ./services/... ./gateway/...` 通过；`tsc --noEmit` 通过
 
@@ -121,20 +121,34 @@ flowchart TB
 ```
 services/rag/
 ├── cmd/main.go          ← 启动 :8085，gin.New() + RegisterRoutes
-├── config.go            ← LoadConfig() 从 env 读取 (RAG_ADDR/MINIKV_ADDR/OPENAI_*)
+├── config.go            ← LoadConfig() 从 env 读取 (RAG_ADDR/MINIKV_ADDR/RAG_ENABLE_*/RAG_WIKI_*)
 ├── handler.go           ← HTTP 路由 + Service 注册 (IngestDocument/List/Retrieve/Chat/...)
 ├── store.go             ← minikv 客户端封装 + RAG Key 编码 + 文档 CRUD
 ├── vector_index.go      ← SideIndex 抽象 + brute cosine TopK + 快照
 ├── hnsw_index.go        ← 默认向量索引 (RAG_INDEX_TYPE=hnsw)
+├── bm25.go              ← M1: BM25 内存倒排 + minikv posting 持久化 + CJK bigram
+├── router.go            ← M2: QueryRouter 规则路由 (L1_wiki/L2_single/L3_agentic, 默认 off)
+├── agentic.go           ← M3: 带硬预算的多轮检索状态机 (PlanFn/GradeFn 可注 LLM)
+├── eval.go / eval_golden.go / eval_faith.go ← M0/M4: golden set 评估 + 忠实度门禁 (make rag-eval)
 ├── rerank.go            ← 可选 rerank
-├── eval.go / eval_test  ← 检索评测辅助
 ├── embedding.go         ← Embedding Provider 抽象 (Hash mock + OpenAI) + 缓存
 ├── chunker.go           ← 固定窗口切块 (按字符/token，可配 chunk_size + overlap)
-├── ingest.go            ← 文档入库编排 (清洗/去重/切块/embed/持久化/更新索引)
-├── retrieve.go          ← 检索编排 (query embed → side index TopK → 回查 chunk 文本)
+├── ingest.go            ← 文档入库编排 (清洗/去重/切块/embed/持久化/更新索引/BM25)
+├── retrieve.go          ← 检索编排 (router → BM25+HNSW → RRF 融合 → 回查 chunk 文本)
 ├── llm.go               ← ChatProvider 抽象 (mock 流式 + OpenAI 流式)
 ├── chat.go              ← 问答编排 (retrieve → prompt 三段式 → LLM → SSE)
-└── (Service)            ← Service struct 聚合 store/idx/emb/llm, 提供 Close()
+├── wiki_*.go            ← L1 Wiki: compile/querier/store(+M5 版本化/回滚)/audit
+└── (Service)            ← Service struct 聚合 store/idx/emb/llm/bm25/router/agentic/wiki
+```
+
+**v3 检索数据流**（Router 默认关，`RAG_ENABLE_ROUTER=1` 开启；各路径 reason 均写 qlog）：
+
+```
+query → QueryRouter.Decide
+  ├─ L1_wiki     → WikiFirstRetrieve / chat.AskWiki（wiki 直答 + 双链引用）
+  ├─ L2_single   → BM25 TopK ∥ HNSW TopK → RRF(k=60) 融合 → hydrate → rerank
+  └─ L3_agentic  → AgenticRetriever：round1 原查询 → 需要时 round2 子查询 → RRF 融合
+                   （硬预算 1+max_rounds 次检索，超限降级 L2 返回，outcome 入 metrics）
 ```
 
 ---
@@ -164,6 +178,10 @@ services/rag/
 | `POST /api/rag/collections/:col/chat` | `Chat` | `rag:query` | SSE 流式问答 |
 | `GET /api/rag/tasks/:task_id` | `GetTask` | `rag:query` | 入库任务状态 |
 | `GET /api/rag/index/snapshot` | `SaveSnapshot` | `rag:ingest` | 手动触发索引快照 |
+| `POST /api/rag/collections/:col/eval` | `EvalCollection` | `rag:query` | M0/M4: Recall@K / MRR / KeyPoint / faithfulness 评估 |
+| `POST /api/rag/collections/:col/wiki/compile` | `WikiCompile` | `rag:ingest` | L1 Wiki 编译（LLM/规则两模式，task_ids 轮询） |
+| `POST /api/rag/collections/:col/wiki/pages/:slug/rollback` | `WikiRollback` | `rag:ingest` | M5: 回滚页面到归档版（version=0 撤销最近覆盖） |
+| `GET /api/rag/collections/:col/wiki/audit` | `WikiAudit` | `rag:query` | M5: 全页引用支撑度审计（零 LLM faithfulness 规则） |
 
 ### 3.3 网关层：gateway (Go Gin)
 
@@ -443,9 +461,11 @@ cd web && npm run dev
 >
 > **架构分层**：客户端 (Next.js) → Gateway (Gin, 中间件洋葱链 + RBAC) → 业务服务 (auth/meta/data/rag) → minikv (TCP) → 引擎。Gateway 对 `/api/rag` 单独定义 RBAC：`rag:ingest` 管写、`rag:query` 管读 + 检索 + 问答，`/retrieve` 和 `/chat` 虽是 POST 但归 query 权限。
 >
-> **数据流**：入库 = 解析 → sha256 去重 → 固定窗口切块 → embed → WriteBatch 原子写 (chunks + meta + status + stats) → 更新 side index；检索 = query embed → side index TopK (cosine 暴力) → 回查 minikv 拿 chunk 文本；问答 = retrieve → prompt 三段式 → LLM 流式 → SSE (token/citation/end/error)。
+> **数据流**：入库 = 解析 → sha256 去重 → 结构感知切块 → embed → WriteBatch 原子写 (chunks + meta + status + stats) → 更新 side index + BM25 倒排；检索 = Router 按查询复杂度路由 → L2 混合检索 (BM25 稀疏 ∥ HNSW 稠密 → RRF 融合) 或 L1 Wiki 直答 / L3 带预算多轮 agentic → 回查 minikv 拿 chunk 文本；问答 = retrieve → prompt 三段式 → LLM 流式 → SSE (token/citation/end/error)。
 >
-> **可独立运行**：没配 `OPENAI_*` 时降级为 hash embedding + mock chat，整套闭环在本地一条命令就能跑通，方便演示。
+> **质量门禁（面试数字）**：28 查询 golden set，hybrid 检索 Recall@5 = 1.000 / MRR = 0.985（dense-only 0.893/0.836，BM25 稀疏通道 +RRF 带来 +10.7pt 召回）；KeyPointRecall@5 = 1.000、extractive faithfulness = 1.0 进 CI 门禁（`make rag-eval`，低于 floor 即 fail）；Wiki 页面版本化 + 回滚 + 引用支撑度审计防「摘要幻觉沿双链固化」。
+>
+> **可独立运行**：没配 `OPENAI_*` 时降级为 hash embedding + mock chat，整套闭环（含 BM25/Router/Agentic/评估/Wiki 审计）在本地零外部依赖跑通，方便演示。
 
 ---
 

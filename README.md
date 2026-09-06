@@ -26,6 +26,8 @@
 
 为什么值得放到简历上？因为面试官最爱追问「这里为什么这么设计」「换个场景你怎么改」——而 TitanKV 让你能从一个真实的、可运行的、有测试的代码库出发去回答，而不是背诵八股。
 
+在这个存储底座之上，仓库还包含一个**纯 Go、零外部依赖的 RAG 知识库服务**（`services/rag`）：它把 minikv 当作唯一持久化层，实现了分层知识架构——规则路由器按查询复杂度分流（L1 Wiki 直答 / L2 混合检索 BM25+HNSW→RRF 融合 / L3 带硬预算的多轮 Agentic 检索），配 28 查询 golden set 与忠实度评估进 CI 门禁（混合检索 Recall@5 = 1.000，较 dense-only +10.7pt），并带 Wiki 页面版本化、回滚与引用支撑度审计。为什么不引入 Qdrant/LangGraph？见 [`RagKv.md §3.5`](RagKv.md) 三问三答。
+
 ### English
 
 Hi, welcome to TitanKV. This is not a thin wrapper around RocksDB or Redis — it is a from-scratch rewrite spanning the storage engine, the network layer, the service tier, and the front-end console.

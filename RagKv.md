@@ -1,7 +1,8 @@
 # TitanKV × RAG 知识库 — 深度结合 minikv 的详细实施计划
 
-> 版本：v2.1  
+> 版本：v3.0  
 > 状态：**已落地**（见 `services/rag/`、`make run-rag` / `make run-all`、落地说明 [`docs/RAG-ARCHITECTURE.md`](docs/RAG-ARCHITECTURE.md)）  
+> v3.0 新增：分层知识架构（Router / L1 Wiki / L2 混合检索 / L3 Agentic）、评估门禁与落地验收（见 §3.5）
 > 目标：在 TitanKV 现有四层栈上，以 minikv 的原生能力（Iterator Seek 前缀扫描 / WriteBatch 原子写 / 压缩 / BloomFilter / BlockCache）为持久化底座，构建完整可运行的 RAG 知识库闭环。本文保留为设计依据；实现细节以源码与 RAG-ARCHITECTURE 为准。
 
 ---
@@ -135,6 +136,35 @@ struct Options {
 - RAG 服务经现有 `minikv_client.go` TCP 协议读写 minikv，**不引入第二套存储**。
 - 向量 side index 第一阶段做内存 + 本地文件快照，**不修改 minikv 核心**，避免打乱已完成的存储引擎主线。
 - minikv 的 `WriteBatch` 保证每个文档入库是原子操作；`Iterator.seek` 做前缀扫描取代 SQL 查询。
+
+### 3.5 v3 分层知识架构（M0–M5 已落地）
+
+v2 是单路检索管道；v3 升级为**分层知识系统**（类比存储层次结构），由 Router 按查询复杂度路由，80%+ 查询走便宜路径：
+
+```
+查询 → QueryRouter (纯规则, <1ms, 可关)
+         │ RouteDecision{Path, Reason}  ← reason 写入 qlog 可审计
+         ├─ L1_wiki     命中 wiki 精确 slug/标题 → WikiFirstRetrieve / AskWiki 直答
+         ├─ L2_single   默认 → 混合检索: BM25 稀疏 + HNSW 稠密 → RRF(k=60) 融合 → rerank
+         └─ L3_agentic  对比/开放式信号 → AgenticRetriever 多轮子查询（硬预算：
+                        max_rounds=2, 1+N 次检索封顶, 超限降级 L2 返回）
+```
+
+各层落点：
+
+| 层 | 模块 | 关键实现 |
+|---|---|---|
+| 评估门禁 | `eval_golden.go` `eval_faith.go` | 28 查询 golden set；hybrid Recall@5=1.000 / MRR=0.985（dense-only 0.893/0.836）；KeyPointRecall、extractive faithfulness 进 CI（`make rag-eval`，低于 floor 即 fail） |
+| L2 稀疏通道 | `bm25.go` | BM25 内存倒排 + minikv posting 持久化（`rag:bm25:` 前缀）；CJK bigram 分词；只看排名进 RRF，量纲无关 |
+| Router | `router.go` | 规则 v1 零 LLM：空查询→L2，slug/标题精确→L1，对比/开放式信号→L3；默认 off（`RAG_ENABLE_ROUTER`） |
+| L3 Agentic | `agentic.go` | 纯 Go 状态机：round1 原查询，round2+ 子查询计划→检索→RRF 融合→重评；PlanFn/GradeFn 可注 LLM，零 LLM 默认可用 |
+| L1 Wiki | `wiki_*`（既有）+ M5 | 页面版本化（`wiki:pver:`，`RAG_WIKI_KEEP_VERSIONS=3`）、rollback 端点、引用支撑度审计（复用 faithfulness 规则，防「摘要幻觉沿双链固化」） |
+
+**为什么不用 Qdrant / LangGraph（三问三答）**
+
+1. **为什么不换 Qdrant/Milvus 做向量检索？** minikv 是本项目的灵魂——RAG 的 chunk 正文、posting、wiki 页全部落 minikv，向量用 side index（HNSW 自研）与 minikv 同构（内存运行时 + 快照/持久化）。单机千万级 chunk 内 HNSW 足够；换 Qdrant 等于把整个存储故事割裂成两套系统，运维与一致性成本远超收益。
+2. **为什么不用 LangGraph/LlamaIndex 编排？** Agentic 循环本质是一个可预算封顶的状态机（plan→retrieve→grade），纯 Go 60 行可测试代码即可承载，且 PlanFn/GradeFn 留了 LLM 钩子。引入 Python sidecar / 框架会带来跨语言部署、依赖膨胀与不可控延迟；框架的价值在快速原型，不在生产单机闭环。
+3. **那什么时候该用它们？** 多租户大规模向量（>1亿）或需要团队级 agentic 工作流编排时。本项目定位是自研存储引擎 + 紧凑 RAG 服务，工程叙事是「用最少的依赖把分层检索做对，并用评估数字证明」——这正是面试可讲性的核心。
 
 ---
 

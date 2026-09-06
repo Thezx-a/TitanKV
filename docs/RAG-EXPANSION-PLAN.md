@@ -184,9 +184,9 @@ make rag-eval   # 三指标齐出，故意注入一条坏答案 → CI 门禁能
 
 ### M6：文档收口（~0.5 天）
 
-- [ ] RagKv.md 升 v3：完整分层图 + "为什么不用 Qdrant/LangGraph" 三问三答（H10）
-- [ ] RAG-ARCHITECTURE.md 同步新数据流
-- [ ] README 一段电梯陈述更新
+- [x] RagKv.md 升 v3：完整分层图 + "为什么不用 Qdrant/LangGraph" 三问三答（H10）
+- [x] RAG-ARCHITECTURE.md 同步新数据流
+- [x] README 一段电梯陈述更新
 
 ---
 
