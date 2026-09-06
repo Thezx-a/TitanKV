@@ -38,6 +38,7 @@ type Retriever struct {
 	index            VectorIndex
 	store            *Store
 	reranker         *Reranker
+	bm25             *BM25Index // M1: 稀疏通道 (nil = 关闭)
 	topK             int
 	enableRewrite    bool
 	enableHyde       bool
@@ -45,6 +46,9 @@ type Retriever struct {
 	multiQueryN      int
 	chat             ChatProvider
 }
+
+// SetBM25 attaches the sparse retrieval lane (M1). Nil disables it.
+func (r *Retriever) SetBM25(b *BM25Index) { r.bm25 = b }
 
 // NewRetriever 构造检索器.
 func NewRetriever(e Embedder, idx VectorIndex, s *Store, rr *Reranker, topK int) *Retriever {
@@ -112,6 +116,12 @@ func (r *Retriever) Retrieve(ctx context.Context, col, query string, topK int) (
 			lists = append(lists, hits)
 		}
 	}
+	// M1: BM25 稀疏通道并行参与 RRF 融合 (融合只看排名, 分数量纲无关)
+	if r.bm25 != nil {
+		if hits := r.retrieveSparse(ctx, col, query, topK); len(hits) > 0 {
+			lists = append(lists, hits)
+		}
+	}
 	if len(lists) == 0 {
 		return nil, nil
 	}
@@ -159,7 +169,28 @@ func (r *Retriever) retrieveOnce(ctx context.Context, col, query string, topK in
 	if len(cands) == 0 {
 		return nil, nil
 	}
+	return hydrateHits(r.store, cands)
+}
 
+// retrieveSparse runs the BM25 lane and hydrates chunk text from minikv (M1).
+func (r *Retriever) retrieveSparse(_ context.Context, col, query string, topK int) []RetrievalHit {
+	if r.bm25 == nil {
+		return nil
+	}
+	cands := r.bm25.Search(col, query, topK)
+	if len(cands) == 0 {
+		return nil
+	}
+	hits, err := hydrateHits(r.store, cands)
+	if err != nil {
+		return nil
+	}
+	return hits
+}
+
+// hydrateHits converts index Hit candidates to full RetrievalHits by concurrent
+// minikv Get of chunk records (hot path: 并发 Get 不争写锁, BloomFilter 跳过无效 SSTable).
+func hydrateHits(store *Store, cands []Hit) ([]RetrievalHit, error) {
 	hits := make([]RetrievalHit, len(cands))
 	var wg sync.WaitGroup
 	for i, h := range cands {
@@ -170,7 +201,7 @@ func (r *Retriever) retrieveOnce(ctx context.Context, col, query string, topK in
 			if !ok {
 				return
 			}
-			raw, ok2, err := r.store.Get(chunkKey(col2, docID, seq))
+			raw, ok2, err := store.Get(chunkKey(col2, docID, seq))
 			if err != nil || !ok2 {
 				return
 			}

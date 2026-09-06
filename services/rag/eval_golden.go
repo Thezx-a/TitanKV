@@ -31,10 +31,10 @@ type GoldenQuery struct {
 
 // GoldenSet is the loaded golden dataset.
 type GoldenSet struct {
-	Collection string        `json:"collection"`
-	Description string       `json:"description"`
-	Documents  []GoldenDoc   `json:"documents"`
-	Queries    []GoldenQuery `json:"queries"`
+	Collection  string        `json:"collection"`
+	Description string        `json:"description"`
+	Documents   []GoldenDoc   `json:"documents"`
+	Queries     []GoldenQuery `json:"queries"`
 }
 
 // LoadGoldenSet reads and validates a golden dataset JSON file.

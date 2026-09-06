@@ -59,11 +59,14 @@ type Config struct {
 	TokenizerEncoding  string // RAG_TOKENIZER_ENCODING, 默认 cl100k_base
 
 	// TitanWiki / W1
-	EnableWiki     bool // RAG_ENABLE_WIKI, 默认 true
-	WikiLLM        bool // RAG_WIKI_LLM, 默认 false（演示用规则 summary；开则走 ChatProvider）
-	WikiWorkers    int  // RAG_WIKI_WORKERS, 默认 2
-	WikiQueueSize  int  // RAG_WIKI_QUEUE_SIZE, 默认 64
-	AutoCompile    bool // RAG_WIKI_AUTO_COMPILE, 默认 true（ingest success 后自动 enqueue）
+	EnableWiki    bool // RAG_ENABLE_WIKI, 默认 true
+	WikiLLM       bool // RAG_WIKI_LLM, 默认 false（演示用规则 summary；开则走 ChatProvider）
+	WikiWorkers   int  // RAG_WIKI_WORKERS, 默认 2
+	WikiQueueSize int  // RAG_WIKI_QUEUE_SIZE, 默认 64
+	AutoCompile   bool // RAG_WIKI_AUTO_COMPILE, 默认 true（ingest success 后自动 enqueue）
+
+	// M1+: 检索增强
+	EnableBM25 bool // RAG_ENABLE_BM25, 默认 true（BM25 稀疏通道与 HNSW 并行，RRF 融合）
 }
 
 // LoadConfig 从环境变量加载配置, 缺省值保证空环境也能启动 (MVP 可运行).
@@ -106,6 +109,7 @@ func LoadConfig() Config {
 		WikiWorkers:        getenvInt("RAG_WIKI_WORKERS", 2),
 		WikiQueueSize:      getenvInt("RAG_WIKI_QUEUE_SIZE", 64),
 		AutoCompile:        getenvBool("RAG_WIKI_AUTO_COMPILE", true),
+		EnableBM25:         getenvBool("RAG_ENABLE_BM25", true),
 	}
 }
 

@@ -71,4 +71,7 @@ Thumbs.db
 
 # ---- Docker local volumes ----
 .docker/
-deploy/dev/volumes/
+deploy/dev/volumes/rag_index/
+
+# RAG 运行时索引快照 (M1: 不入库)
+services/rag/rag_index/

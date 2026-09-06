@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"path/filepath"
 	"time"
@@ -27,6 +28,7 @@ type Service struct {
 	wikiQ       *WikiQuerier
 	compiler    *Compiler
 	compilePool *CompilePool
+	bm25        *BM25Index // M1: 稀疏通道 (nil = 关闭)
 }
 
 // NewService 构造 Service (由 cmd/main.go 调用).
@@ -77,11 +79,25 @@ func NewService(cfg Config) (*Service, error) {
 		EnableHyde: cfg.EnableHyde, EnableMultiQuery: cfg.EnableMultiQuery,
 		MultiQueryN: cfg.MultiQueryN, Chat: cp,
 	})
+	// M1: BM25 稀疏通道 (内存倒排 + minikv posting; 重启从 rag:bm25:* 恢复,
+	// 空则从 rag:chunk:* 自愈重建, 与向量索引 RebuildFromStore 同构)
+	var bm25 *BM25Index
+	if cfg.EnableBM25 {
+		bm25 = NewBM25Index(store)
+		if n, err := bm25.LoadFromStore(); err != nil {
+			log.Printf("[rag] bm25 load: %v", err)
+		} else if n > 0 {
+			log.Printf("[rag] bm25 restored %d collection(s) from minikv", n)
+		}
+		bm25.MaybeRebuildFromChunks()
+		ret.SetBM25(bm25)
+		ing.SetBM25(bm25)
+	}
 	chatOrch := NewChatOrchestratorWithHistory(ret, cp, store, cfg.DefaultTopK, cfg.HistoryTurns)
 
 	svc := &Service{
 		cfg: cfg, store: store, index: idx, embedder: emb,
-		ingester: ing, retriever: ret, chat: chatOrch,
+		ingester: ing, retriever: ret, chat: chatOrch, bm25: bm25,
 	}
 	if cfg.AsyncIngest {
 		svc.pool = NewIngestPool(IngestPoolConfig{
@@ -158,6 +174,7 @@ func (s *Service) RegisterRoutes(r *gin.Engine) {
 			"chat":          s.cfg.ChatProvider,
 			"index_size":    s.index.Size(),
 			"index_dir":     s.cfg.IndexDir,
+			"bm25":          s.cfg.EnableBM25,
 			"async_ingest":  s.cfg.AsyncIngest,
 			"query_rewrite": s.cfg.EnableQueryRewrite,
 			"hyde":          s.cfg.EnableHyde,
@@ -385,6 +402,14 @@ func (s *Service) DeleteDocument(c *gin.Context) {
 		return
 	}
 	s.index.ClearByPrefix(col + "/" + doc + "/")
+	// M1: BM25 倒排同步清理 (内存 + minikv posting)
+	if s.bm25 != nil {
+		if err := s.bm25.RemoveDoc(col, doc); err != nil {
+			log.Printf("[rag] bm25 remove %s/%s: %v", col, doc, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "bm25 remove: " + err.Error()})
+			return
+		}
+	}
 	// W1.5: wiki pages/edges/raw + per-slug vectors (not whole col/wiki/)
 	if s.wiki != nil {
 		if idx, err := s.wiki.LoadIndex(col); err == nil && idx != nil {
@@ -566,7 +591,17 @@ func (s *Service) IndexStats(c *gin.Context) {
 		"chunker":    ActiveChunkerVersion(CurrentTokenizerMode()),
 		"rerank":     s.cfg.EnableRerank,
 		"rerank_url": s.cfg.RerankURL != "",
+		"bm25":       s.cfg.EnableBM25,
+		"bm25_stats": s.bm25StatsIfEnabled(),
 	})
+}
+
+// bm25StatsIfEnabled returns sparse-lane stats for observability endpoints.
+func (s *Service) bm25StatsIfEnabled() map[string]any {
+	if s.bm25 == nil {
+		return nil
+	}
+	return gin.H{"postings": s.bm25.Size()}
 }
 
 // loadAllSnapshots 启动时从 IndexDir 加载所有 *.idx 合并进索引 (重建内存索引).

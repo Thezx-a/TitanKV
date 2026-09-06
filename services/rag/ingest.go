@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -20,8 +21,12 @@ type Ingester struct {
 	chunker  *Chunker
 	embedder Embedder
 	index    VectorIndex
+	bm25     *BM25Index // M1: 稀疏通道 (nil = 关闭)
 	cfg      Config
 }
+
+// SetBM25 attaches the sparse lane so ingest builds inverted postings too.
+func (g *Ingester) SetBM25(b *BM25Index) { g.bm25 = b }
 
 // NewIngester 构造入库器.
 func NewIngester(s *Store, ch *Chunker, e Embedder, idx VectorIndex, cfg Config) *Ingester {
@@ -125,6 +130,13 @@ func (g *Ingester) runIngest(ctx context.Context, task *IngestTask, title, sourc
 	}
 	for cid, vec := range vectors {
 		g.index.Add(cid, vec)
+	}
+	// M1: BM25 倒排同批入库 (内存 + minikv posting 持久化).
+	// 失败不阻断入库: Add 幂等, 重启后 MaybeRebuildFromChunks 可自愈.
+	if g.bm25 != nil {
+		if err := g.bm25.Add(col, docID, records); err != nil {
+			log.Printf("[rag] bm25 add %s/%s failed (will self-heal on rebuild): %v", col, docID, err)
+		}
 	}
 	if err := g.store.Put(docStatusKey(col, docID), TaskSuccess); err != nil {
 		RagIngestTotal.WithLabelValues("failed").Inc()

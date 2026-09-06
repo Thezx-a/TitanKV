@@ -269,12 +269,16 @@ func (s *Store) DeleteDocument(col, docID string) error {
 	return s.kv.WriteBatch(ops)
 }
 
-// DeleteCollection removes all rag:doc / rag:chunk / rag:qlog keys for a collection.
+// DeleteCollection removes all rag:doc / rag:chunk / rag:bm25 / rag:qlog keys for a collection.
 func (s *Store) DeleteCollection(col string) error {
 	if err := s.DeletePrefix(docPrefix(col)); err != nil {
 		return err
 	}
 	if err := s.DeletePrefix(fmt.Sprintf("rag:chunk:%s:", col)); err != nil {
+		return err
+	}
+	// M1: BM25 posting 段一并清理
+	if err := s.DeletePrefix(fmt.Sprintf("rag:bm25:%s:", col)); err != nil {
 		return err
 	}
 	return s.DeletePrefix(fmt.Sprintf("rag:qlog:%s:", col))

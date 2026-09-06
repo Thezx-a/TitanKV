@@ -20,12 +20,13 @@ import (
 // 基线数字记录在 docs/rag-eval-baseline.md; 新功能 (BM25 等) 只允许向上.
 
 const (
-	goldenRecallFloor = 0.83 // M0 实测基线 0.929 * 0.9
-	goldenMRRFloor    = 0.75 // M0 实测基线 0.833 * 0.9
+	goldenRecallFloor = 0.90 // M1 实测基线 1.000 * 0.9
+	goldenMRRFloor    = 0.89 // M1 实测基线 0.985 * 0.9
 )
 
 // newGoldenHarness 构建与 NewService 同构的检索链路 (无 wiki/池, 同步入库).
-func newGoldenHarness(t *testing.T) (*Store, *Ingester, *Retriever, *GoldenSet) {
+// enableBM25=true 时挂稀疏通道 (与生产默认一致).
+func newGoldenHarness(t *testing.T, enableBM25 bool) (*Store, *Ingester, *Retriever, *GoldenSet) {
 	t.Helper()
 	gs, err := LoadGoldenSet(filepath.Join("testdata", "golden.json"))
 	if err != nil {
@@ -38,6 +39,11 @@ func newGoldenHarness(t *testing.T) (*Store, *Ingester, *Retriever, *GoldenSet) 
 	cfg := Config{IndexDir: t.TempDir(), AsyncIngest: false, EmbeddingBatch: 32}
 	ing := NewIngester(store, NewChunker(512, 64), emb, idx, cfg)
 	ret := NewRetrieverWithConfig(emb, idx, store, NewReranker(false), RetrieverConfig{TopK: 5})
+	if enableBM25 {
+		bm := NewBM25Index(store)
+		ing.SetBM25(bm)
+		ret.SetBM25(bm)
+	}
 	return store, ing, ret, gs
 }
 
@@ -71,21 +77,34 @@ func ingestGolden(t *testing.T, ing *Ingester, store *Store, gs *GoldenSet) {
 }
 
 // TestGoldenEvalBaseline 是 make rag-eval 的入口: 输出并断言 Recall@K / MRR.
+// 门禁针对混合检索 (BM25+dense, 生产默认); 另跑 dense-only 作对照,
+// 断言稀疏通道不倒退 (BM25 融合只应更好).
 func TestGoldenEvalBaseline(t *testing.T) {
-	store, ing, ret, gs := newGoldenHarness(t)
-	ingestGolden(t, ing, store, gs)
+	// dense-only 对照组
+	storeD, ingD, retD, gsD := newGoldenHarness(t, false)
+	ingestGolden(t, ingD, storeD, gsD)
+	dense := Evaluate(context.Background(), retD, gsD.Collection, gsD.ToEvalQueries(), 5)
+	fmt.Printf("[golden-eval] dense-only : queries=%d Recall@5=%.3f MRR=%.3f\n",
+		dense.Queries, dense.RecallAtK, dense.MRR)
 
-	res := Evaluate(context.Background(), ret, gs.Collection, gs.ToEvalQueries(), 5)
-	fmt.Printf("[golden-eval] queries=%d topK=%d Recall@5=%.3f MRR=%.3f\n",
-		res.Queries, res.TopK, res.RecallAtK, res.MRR)
+	// 混合检索 (生产默认, 门禁对象)
+	storeH, ingH, retH, gsH := newGoldenHarness(t, true)
+	ingestGolden(t, ingH, storeH, gsH)
+	hybrid := Evaluate(context.Background(), retH, gsH.Collection, gsH.ToEvalQueries(), 5)
+	fmt.Printf("[golden-eval] hybrid(bm25): queries=%d Recall@5=%.3f MRR=%.3f\n",
+		hybrid.Queries, hybrid.RecallAtK, hybrid.MRR)
 
-	if res.RecallAtK < goldenRecallFloor {
+	if hybrid.RecallAtK < goldenRecallFloor {
 		t.Errorf("Recall@K=%.3f below floor %.3f (quality regression, see docs/rag-eval-baseline.md)",
-			res.RecallAtK, goldenRecallFloor)
+			hybrid.RecallAtK, goldenRecallFloor)
 	}
-	if res.MRR < goldenMRRFloor {
+	if hybrid.MRR < goldenMRRFloor {
 		t.Errorf("MRR=%.3f below floor %.3f (quality regression, see docs/rag-eval-baseline.md)",
-			res.MRR, goldenMRRFloor)
+			hybrid.MRR, goldenMRRFloor)
+	}
+	if hybrid.RecallAtK+0.001 < dense.RecallAtK {
+		t.Errorf("hybrid recall (%.3f) must not regress vs dense-only (%.3f)",
+			hybrid.RecallAtK, dense.RecallAtK)
 	}
 }
 
