@@ -20,8 +20,9 @@ import (
 // 基线数字记录在 docs/rag-eval-baseline.md; 新功能 (BM25 等) 只允许向上.
 
 const (
-	goldenRecallFloor = 0.90 // M1 实测基线 1.000 * 0.9
-	goldenMRRFloor    = 0.89 // M1 实测基线 0.985 * 0.9
+	goldenRecallFloor   = 0.90 // M1 实测基线 1.000 * 0.9
+	goldenMRRFloor      = 0.89 // M1 实测基线 0.985 * 0.9
+	goldenKeyPointFloor = 0.95 // M4 实测基线 1.000 × 0.95
 )
 
 // newGoldenHarness 构建与 NewService 同构的检索链路 (无 wiki/池, 同步入库).
@@ -94,6 +95,14 @@ func TestGoldenEvalBaseline(t *testing.T) {
 	fmt.Printf("[golden-eval] hybrid(bm25): queries=%d Recall@5=%.3f MRR=%.3f\n",
 		hybrid.Queries, hybrid.RecallAtK, hybrid.MRR)
 
+	// M4: 要点覆盖 + 忠实度管道健全性 (三指标齐出)
+	faith, err := EvaluateFaith(context.Background(), retH, gsH.Collection, gsH.ToFaithQueries(), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("[golden-eval] faith        : KeyPointRecall@5=%.3f extractive_faithfulness=%.3f unsupported=%d\n",
+		faith.KeyPointRecall, faith.Faithfulness, faith.UnsupportedN)
+
 	if hybrid.RecallAtK < goldenRecallFloor {
 		t.Errorf("Recall@K=%.3f below floor %.3f (quality regression, see docs/rag-eval-baseline.md)",
 			hybrid.RecallAtK, goldenRecallFloor)
@@ -105,6 +114,15 @@ func TestGoldenEvalBaseline(t *testing.T) {
 	if hybrid.RecallAtK+0.001 < dense.RecallAtK {
 		t.Errorf("hybrid recall (%.3f) must not regress vs dense-only (%.3f)",
 			hybrid.RecallAtK, dense.RecallAtK)
+	}
+	// M4 门禁: 要点覆盖与提取式忠实度
+	if faith.KeyPointRecall < goldenKeyPointFloor {
+		t.Errorf("KeyPointRecall=%.3f below floor %.3f (see docs/rag-eval-baseline.md)",
+			faith.KeyPointRecall, goldenKeyPointFloor)
+	}
+	if faith.Faithfulness < 1.0 {
+		t.Errorf("extractive faithfulness=%.3f < 1: pipeline bug (hydration/scorecorruption), unsupported=%d",
+			faith.Faithfulness, faith.UnsupportedN)
 	}
 }
 

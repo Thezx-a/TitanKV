@@ -15,8 +15,9 @@ type EvalResult struct {
 
 // EvalQuery is one labeled query with relevant chunk IDs.
 type EvalQuery struct {
-	Query       string
-	RelevantIDs []string
+	Query          string
+	RelevantIDs    []string
+	ExpectedPoints []string // M4: 期望答案要点 (KeyPointRecall)
 }
 
 // Evaluate runs labeled queries through the retriever and computes Recall@K and MRR.

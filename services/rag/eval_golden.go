@@ -66,3 +66,14 @@ func (gs *GoldenSet) ToEvalQueries() []EvalQuery {
 	}
 	return out
 }
+
+// ToFaithQueries converts golden queries to faithfulness eval input (M4).
+func (gs *GoldenSet) ToFaithQueries() []EvalQuery {
+	out := make([]EvalQuery, 0, len(gs.Queries))
+	for _, q := range gs.Queries {
+		out = append(out, EvalQuery{
+			Query: q.Query, RelevantIDs: q.RelevantIDs, ExpectedPoints: q.ExpectedPoints,
+		})
+	}
+	return out
+}

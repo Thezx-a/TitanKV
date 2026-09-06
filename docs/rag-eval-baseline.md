@@ -10,6 +10,13 @@
 |---|---|---|---|
 | Recall@5 | 0.893 | **1.000** | ≥ 0.90 |
 | MRR | 0.836 | **0.985** | ≥ 0.89 |
+| KeyPointRecall@5 (M4) | — | **1.000** | ≥ 0.95 |
+| extractive faithfulness (M4) | — | **1.000** | = 1.0 (管道健全性) |
+
+M4 说明：
+- KeyPointRecall：检索命中文本对 golden `expected_points` 要点的覆盖率，防「ID 对但内容不含要点」的假阳性
+- extractive faithfulness：以 top-1 原文为参照答案，对引用的忠实度必须恒为 1（评分器/hydration 管道自检）
+- 坏答案注入验收：`TestFaithGateBlocksHallucination` 验证幻觉断言（引用中不存在的实体）被门禁拦截
 | 查询数 | 28（关键词 25 + 改述 3） | — |
 
 说明：
