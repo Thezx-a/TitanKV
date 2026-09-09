@@ -36,7 +36,8 @@ int compactionRetryBackoffMs(int consecutive_failures) {
 CompactionManager::CompactionManager(Version* version, const std::string& db_path,
                                      size_t block_size, int max_level,
                                      size_t l0_trigger, BlockCache* block_cache,
-                                     TableCache* table_cache, int fail_inject)
+                                     TableCache* table_cache, int fail_inject,
+                                     uint8_t hot_compression, uint8_t bottom_compression)
     : version_(version),
       db_path_(db_path),
       block_size_(block_size),
@@ -44,6 +45,8 @@ CompactionManager::CompactionManager(Version* version, const std::string& db_pat
       l0_trigger_(l0_trigger),
       block_cache_(block_cache),
       table_cache_(table_cache),
+      hot_compression_(hot_compression),
+      bottom_compression_(bottom_compression),
       running_(false),
       triggered_(false),
       fail_inject_(fail_inject) {}
@@ -206,7 +209,14 @@ Status CompactionManager::mergeLevelFiles(int src_level,
         dst_dir + "/" + std::to_string(file_no) + ".sst";
     std::string tmp_path = final_path + ".tmp";
 
-    SSTableBuilder builder(tmp_path, block_size_);
+    // Tiered compression: dst == bottommost (coldest, largest) → zstd for ratio;
+    // hot layers → snappy for CPU. The builder records the actual type used in
+    // every block header (falls back to kNone when a block grows), so mixed
+    // levels coexist safely.
+    const bool bottom = (dst_level == max_level_);
+    const CompressionType ctype = static_cast<CompressionType>(
+        bottom ? bottom_compression_ : hot_compression_);
+    SSTableBuilder builder(tmp_path, block_size_, ctype);
 
     std::string last_user;
     size_t kept = 0;

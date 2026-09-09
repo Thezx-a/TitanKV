@@ -67,7 +67,9 @@ Status DBImpl::open(const Options& options, std::unique_ptr<DB>* dbptr) {
         &impl->version_, impl->db_path_, impl->options_.block_size,
         impl->options_.max_level, impl->options_.level0_compaction_trigger,
         impl->block_cache_.get(), impl->table_cache_.get(),
-        impl->options_.compaction_fail_inject);
+        impl->options_.compaction_fail_inject,
+        impl->options_.compression,
+        impl->options_.bottommost_compression);
     impl->compaction_mgr_->start();
     *dbptr = std::move(impl);
     return Status::Ok();

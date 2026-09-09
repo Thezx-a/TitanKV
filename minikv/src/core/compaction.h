@@ -23,7 +23,9 @@ public:
                       size_t block_size = 4096, int max_level = 7,
                       size_t l0_trigger = 4, BlockCache* block_cache = nullptr,
                       TableCache* table_cache = nullptr,
-                      int fail_inject = 0);
+                      int fail_inject = 0,
+                      uint8_t hot_compression = 1,
+                      uint8_t bottom_compression = 2);
     ~CompactionManager();
 
     void start();
@@ -51,6 +53,11 @@ private:
     size_t l0_trigger_;
     BlockCache* block_cache_;
     TableCache* table_cache_;
+    // Tiered compression: hot layers use hot_compression_, bottommost (cold)
+    // uses bottom_compression_. Block headers carry the type, so the reader
+    // auto-detects and levels can mix freely.
+    uint8_t hot_compression_;
+    uint8_t bottom_compression_;
     std::thread compact_thread_;
     std::atomic<bool> running_;
     std::atomic<bool> triggered_;

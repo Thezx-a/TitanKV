@@ -28,7 +28,11 @@ struct Options {
     // The on-disk block header records the actual scheme so readers can
     // always decompress correctly regardless of this option at read time.
     //   0 = none, 1 = snappy, 2 = zstd
-    uint8_t compression = 1;  // default: snappy
+    uint8_t compression = 1;  // default: snappy (hot layers: L0 flush + non-bottom compaction)
+    // Compression for the bottommost (coldest, largest) level. Tiered scheme:
+    // hot data pays less CPU (snappy), cold data pays more for ratio (zstd).
+    // Reader auto-detects per-block type from each block header, so levels can mix.
+    uint8_t bottommost_compression = 2;  // default: zstd-3
 
     // E4 test hook: first N CompactionManager merges return IOError (then real).
     // Production must leave at 0.
